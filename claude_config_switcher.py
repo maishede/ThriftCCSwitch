@@ -555,9 +555,12 @@ class NodeWidget(QFrame):
 
     def run_proxy_script(self, path):
         try:
+            # 从路径解析端口号
+            port = self.node_data.get('base_url', '').split(':')[-1].split('/')[0]
+            window_title = f"ThriftCCSwitch Proxy (Port {port})"
             # 启动并托管
             p = subprocess.Popen([path], creationflags=subprocess.CREATE_NEW_CONSOLE)
-            self.parent_window.register_proxy_process(p)
+            self.parent_window.register_proxy_process(p, port, window_title)
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法启动代理脚本: {e}")
 
@@ -572,7 +575,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.loading_dialog = None
 
-        self.proxy_processes = []
+        self.proxy_processes = []  # 存储 (Popen对象, 端口号, 窗口标题) 元组
 
         self.init_ui()
 
@@ -609,22 +612,55 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Sync Env Error: {e}")
 
-    def register_proxy_process(self, process):
-        self.proxy_processes.append(process)
+    def register_proxy_process(self, process, port, window_title):
+        self.proxy_processes.append((process, port, window_title))
 
     def closeEvent(self, event: QCloseEvent):
         if self.proxy_processes:
-            count = 0
-            for p in self.proxy_processes:
-                if p.poll() is None:
-                    try:
-                        p.terminate()
-                        count += 1
-                    except:
-                        pass
-            if count > 0:
-                print(f"已清理 {count} 个后台代理进程。")
+            self.kill_all_proxy_processes()
         event.accept()
+
+    def kill_all_proxy_processes(self):
+        """终止所有代理进程及其子进程"""
+        count = 0
+        for p, port, window_title in self.proxy_processes:
+            if p.poll() is None:  # 进程还在运行
+                try:
+                    # 方法1: 使用 psutil 递归终止子进程
+                    try:
+                        import psutil
+                        parent = psutil.Process(p.pid)
+                        # 递归终止所有子进程
+                        for child in parent.children(recursive=True):
+                            try:
+                                child.terminate()
+                                count += 1
+                            except psutil.NoSuchProcess:
+                                pass
+                        # 终止父进程
+                        parent.terminate()
+                        count += 1
+                    except ImportError:
+                        # 如果没有 psutil，使用 taskkill 按窗口标题终止
+                        self.kill_by_window_title(window_title)
+                        count += 1
+                    except psutil.NoSuchProcess:
+                        pass
+                except Exception as e:
+                    print(f"终止代理进程失败: {e}")
+
+        if count > 0:
+            print(f"已清理 {count} 个代理进程。")
+
+    def kill_by_window_title(self, window_title):
+        """通过窗口标题终止进程（备用方法）"""
+        try:
+            # 使用 taskkill 按窗口标题查找并终止进程
+            # 需要转义特殊字符
+            cmd = f'taskkill /FI "WINDOWTITLE eq {window_title}*" /F /T 2>nul'
+            subprocess.run(cmd, shell=True, capture_output=True)
+        except Exception as e:
+            print(f"按窗口标题终止进程失败: {e}")
 
     def init_ui(self):
         central_widget = QWidget()
@@ -673,9 +709,11 @@ class MainWindow(QMainWindow):
             return ""
 
     def refresh_list(self):
-        for i in range(self.scroll_layout.count()):
-            item = self.scroll_layout.itemAt(i)
-            if item.widget(): item.widget().deleteLater()
+        # 使用 takeAt 立即移除并删除所有 widget，避免 deleteLater 的异步问题
+        while self.scroll_layout.count():
+            item = self.scroll_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
         active_hash = self.get_active_hash()
 
@@ -733,7 +771,9 @@ class MainWindow(QMainWindow):
         if source_btn: source_btn.setEnabled(True)
         self.refresh_list()
         if success:
-            if "无需重复" not in message: QMessageBox.information(self, "成功", message)
+            if "无需重复" not in message:
+                msg = f"{message}\n\n提示：重新打开终端后环境变量生效"
+                QMessageBox.information(self, "成功", msg)
         else:
             QMessageBox.critical(self, "错误", message)
 

@@ -1,6 +1,9 @@
 # 图形界面库
 PyQt5==5.15.11
 
+# 进程管理 (用于终止代理子进程)
+psutil==6.1.0
+
 # 代理服务相关 (Litellm及其依赖)
 litellm==1.80.11
 litellm-enterprise==0.1.27
