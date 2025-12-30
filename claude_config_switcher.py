@@ -5,6 +5,7 @@ import subprocess
 import winreg
 import ctypes
 import hashlib
+import copy
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QScrollArea,
                              QDialog, QFormLayout, QLineEdit, QMessageBox, QFrame,
@@ -27,6 +28,19 @@ if not os.path.exists(APP_DIR):
     os.makedirs(APP_DIR)
 
 
+# --- [新增] 工具类：用于统一计算哈希 ---
+class Utils:
+    @staticmethod
+    def get_config_hash(data):
+        """计算配置字典的MD5哈希，用于比对配置是否一致"""
+        # 仅取关键字段参与计算，避免UI相关字段干扰
+        clean_data = {k: data.get(k) for k in [
+            'api_key', 'base_url', 'haiku_model', 'sonnet_model', 'opus_model'
+        ]}
+        s = json.dumps(clean_data, sort_keys=True)
+        return hashlib.md5(s.encode('utf-8')).hexdigest()
+
+
 # --- 核心修复：应用配置线程 ---
 
 class ApplierThread(QThread):
@@ -39,15 +53,13 @@ class ApplierThread(QThread):
 
     def run(self):
         try:
-            # 1. 检查哈希去重
-            current_hash = self.get_config_hash(self.node_data)
+            # 1. 检查哈希去重 [修改：使用Utils类]
+            current_hash = Utils.get_config_hash(self.node_data)
             last_hash = self.load_last_hash()
 
             if not self.force_update and current_hash == last_hash:
-                # 即使哈希没变，为了保险起见，也更新一下当前进程的 os.environ
-                # 这样可以防止用户手动改了环境后软件没感知
                 self.update_process_env()
-                self.finished_signal.emit(True, "当前配置已是最新 (进程环境已同步)。")
+                self.finished_signal.emit(True, "当前配置已是最新 (无需重复应用)。")
                 return
 
             # 2. 准备变量
@@ -64,13 +76,11 @@ class ApplierThread(QThread):
                     winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
                 winreg.CloseKey(key)
 
-                # 广播消息
                 ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 1000, 0)
             except Exception as e:
                 raise Exception(f"注册表写入失败: {e}")
 
-            # 4. 【关键修复】同步更新当前 Python 进程的环境变量
-            # 这样后续 spawn 的 PowerShell 子进程才会继承最新的值
+            # 4. 同步更新当前 Python 进程的环境变量
             for name, value in env_vars.items():
                 os.environ[name] = value
 
@@ -80,13 +90,12 @@ class ApplierThread(QThread):
             # 6. 保存状态
             self.save_current_state(current_hash)
 
-            self.finished_signal.emit(True, "配置应用成功！\n(注册表与当前进程环境均已更新)")
+            self.finished_signal.emit(True, "配置应用成功！")
 
         except Exception as e:
             self.finished_signal.emit(False, str(e))
 
     def update_process_env(self):
-        """辅助方法：仅更新当前进程内存中的环境"""
         os.environ['ANTHROPIC_AUTH_TOKEN'] = self.node_data.get('api_key', '')
         os.environ['ANTHROPIC_BASE_URL'] = self.node_data.get('base_url', 'https://open.bigmodel.cn/api/anthropic')
         os.environ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] = '1'
@@ -113,10 +122,6 @@ class ApplierThread(QThread):
         with open(CLAUDE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(settings_content, f, indent=4)
 
-    def get_config_hash(self, data):
-        s = json.dumps(data, sort_keys=True)
-        return hashlib.md5(s.encode('utf-8')).hexdigest()
-
     def load_last_hash(self):
         if not os.path.exists(CURRENT_STATE_FILE):
             return ""
@@ -132,7 +137,7 @@ class ApplierThread(QThread):
             json.dump({'hash': hash_val, 'name': self.node_data.get('name')}, f)
 
 
-# --- ConfigManager 和 LoadingDialog 保持不变 ---
+# --- ConfigManager 和 LoadingDialog ---
 class ConfigManager:
     @staticmethod
     def load_nodes():
@@ -158,31 +163,21 @@ class LoadingDialog(QProgressDialog):
         self.setStyleSheet("QProgressBar {border: 1px solid grey; border-radius: 5px; text-align: center;}")
 
 
-# --- NodeEditorDialog 保持不变 (略) ---
+# --- NodeEditorDialog ---
 class NodeEditorDialog(QDialog):
     def __init__(self, parent=None, node_data=None):
         super().__init__(parent)
         self.setWindowTitle("配置节点编辑器")
         self.setMinimumWidth(450)
         self.setStyleSheet("""
-                    QDialog {
-                        background-color: #ffffff;
-                    }
-                    QLabel {
-                        color: #333333;
-                        font-size: 13px;
-                    }
+                    QDialog { background-color: #ffffff; }
+                    QLabel { color: #333333; font-size: 13px; }
                     QLineEdit {
-                        background-color: #ffffff;
-                        color: #333333;
-                        border: 1px solid #cccccc;
-                        border-radius: 4px;
-                        padding: 6px;
-                        font-size: 13px;
+                        background-color: #ffffff; color: #333333;
+                        border: 1px solid #cccccc; border-radius: 4px;
+                        padding: 6px; font-size: 13px;
                     }
-                    QLineEdit:focus {
-                        border: 1px solid #3498db;
-                    }
+                    QLineEdit:focus { border: 1px solid #3498db; }
                 """)
         self.node_data = node_data or {}
         layout = QFormLayout()
@@ -218,42 +213,120 @@ class NodeEditorDialog(QDialog):
         }
 
 
-# --- NodeWidget 保持不变 (略) ---
+# --- NodeWidget [修改：增加高亮样式逻辑] ---
+# --- NodeWidget [已修复：布局防抖动 + 修改按钮美化] ---
 class NodeWidget(QFrame):
-    def __init__(self, node_data, parent_window, index):
+    def __init__(self, node_data, parent_window, index, is_active=False):
         super().__init__()
         self.node_data = node_data
         self.parent_window = parent_window
         self.index = index
         self.setFrameShape(QFrame.StyledPanel)
-        self.setStyleSheet(
-            "NodeWidget { background-color: #fff; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 8px; }")
+
+        # 1. 样式定义：激活状态 vs 普通状态
+        # 为了防止边框宽度变化(1px->2px)导致微小的抖动，我们在普通状态下也设置2px边框，但是颜色设为浅灰色或透明
+        if is_active:
+            # 激活：浅绿背景，绿色粗边框
+            bg_color = "#f0fdf4"
+            border_style = "2px solid #2ecc71"
+            title_color = "#27ae60"
+            prefix = "✅ "  # 仅加一个短图标，不加长文字，防止换行
+        else:
+            # 普通：白色背景，灰色细边框 (设为2px但颜色浅，保持占位一致)
+            bg_color = "#ffffff"
+            border_style = "2px solid #e0e0e0"
+            title_color = "#333333"
+            prefix = ""
+
+        self.setStyleSheet(f"""
+            NodeWidget {{
+                background-color: {bg_color};
+                border: {border_style};
+                border-radius: 8px;
+                margin-bottom: 8px;
+            }}
+            QLabel {{ border: none; background: transparent; }}
+        """)
+
+        # 2. 布局初始化
         main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(15, 12, 15, 12)  # 增加一点内边距，更美观
+        main_layout.setSpacing(10)
+
         info_layout = QVBoxLayout()
-        title = QLabel(node_data.get('name', '未命名'))
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        info_layout.setSpacing(4)
+
+        # 标题部分
+        name_text = f"{prefix}{node_data.get('name', '未命名')}"
+        title = QLabel(name_text)
+        # 字体稍微加大加粗
+        title.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {title_color};")
+
+        # 详情部分
         key_vis = node_data.get('api_key', '')
         if len(key_vis) > 8: key_vis = key_vis[:4] + "****" + key_vis[-4:]
-        details = QLabel(f"Key: {key_vis} | Model: {node_data.get('sonnet_model')}")
-        details.setStyleSheet("color: #666; font-size: 11px;")
+        details_text = f"Key: {key_vis}  |  Model: {node_data.get('sonnet_model', '-')}"
+        details = QLabel(details_text)
+        details.setStyleSheet("color: #7f8c8d; font-size: 11px;")
+
         info_layout.addWidget(title)
         info_layout.addWidget(details)
-        main_layout.addLayout(info_layout)
+        main_layout.addLayout(info_layout, stretch=1)  # stretch=1 让文字部分占据剩余空间
+
+        # 3. 按钮组
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        # 通用按钮样式函数
+        def get_btn_style(color, hover_color):
+            return f"""
+                QPushButton {{
+                    background-color: {color};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{ background-color: {hover_color}; }}
+                QPushButton:pressed {{ background-color: {color}; opacity: 0.8; }}
+                QPushButton:disabled {{ background-color: #bdc3c7; color: #fff; }}
+            """
+
+        # [应用] 按钮 (绿色)
         self.apply_btn = QPushButton("应用")
-        self.apply_btn.setStyleSheet("background-color: #27ae60; color: white; border-radius: 4px; padding: 5px;")
-        self.apply_btn.setFixedSize(60, 30)
+        self.apply_btn.setFixedSize(60, 32)
+        if is_active:
+            self.apply_btn.setText("当前")
+            self.apply_btn.setEnabled(False)
+            self.apply_btn.setStyleSheet(get_btn_style("#bdc3c7", "#bdc3c7"))  # 灰色
+        else:
+            self.apply_btn.setStyleSheet(get_btn_style("#27ae60", "#2ecc71"))
         self.apply_btn.clicked.connect(self.on_apply_click)
+
+        # [修改] 按钮 (橙色 - 新增样式)
         edit_btn = QPushButton("修改")
-        edit_btn.setFixedSize(50, 30)
+        edit_btn.setFixedSize(50, 32)
+        edit_btn.setStyleSheet(get_btn_style("#f39c12", "#f1c40f"))
         edit_btn.clicked.connect(self.edit_node)
+
+        # [复制] 按钮 (蓝色)
+        copy_btn = QPushButton("复制")
+        copy_btn.setFixedSize(50, 32)
+        copy_btn.setStyleSheet(get_btn_style("#3498db", "#5dade2"))
+        copy_btn.clicked.connect(self.copy_node)
+
+        # [删除] 按钮 (红色)
         del_btn = QPushButton("删除")
-        del_btn.setStyleSheet("background-color: #e74c3c; color: white; border-radius: 4px;")
-        del_btn.setFixedSize(50, 30)
+        del_btn.setFixedSize(50, 32)
+        del_btn.setStyleSheet(get_btn_style("#e74c3c", "#ec7063"))
         del_btn.clicked.connect(self.delete_node)
+
         btn_layout.addWidget(self.apply_btn)
         btn_layout.addWidget(edit_btn)
+        btn_layout.addWidget(copy_btn)
         btn_layout.addWidget(del_btn)
+
         main_layout.addLayout(btn_layout)
         self.setLayout(main_layout)
 
@@ -266,12 +339,15 @@ class NodeWidget(QFrame):
         if dialog.exec_() == QDialog.Accepted:
             self.parent_window.update_node(self.index, dialog.get_data())
 
+    def copy_node(self):
+        self.parent_window.duplicate_node(self.index)
+
     def delete_node(self):
         if QMessageBox.question(self, "确认", "删除此节点？", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             self.parent_window.delete_node(self.index)
 
 
-# --- MainWindow 修复 view_env ---
+# --- MainWindow ---
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -318,16 +394,35 @@ class MainWindow(QMainWindow):
 
         self.refresh_list()
 
+    # [新增] 读取当前激活的配置Hash
+    def get_active_hash(self):
+        if not os.path.exists(CURRENT_STATE_FILE):
+            return ""
+        try:
+            with open(CURRENT_STATE_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get('hash', "")
+        except:
+            return ""
+
+    # [修改] 刷新列表时比对Hash
     def refresh_list(self):
         for i in range(self.scroll_layout.count()):
             item = self.scroll_layout.itemAt(i)
             if item.widget(): item.widget().deleteLater()
 
+        active_hash = self.get_active_hash()
+
         if not self.nodes:
             self.scroll_layout.addWidget(QLabel("暂无配置"))
         else:
             for idx, node in enumerate(self.nodes):
-                self.scroll_layout.addWidget(NodeWidget(node, self, idx))
+                # 计算当前节点Hash
+                node_hash = Utils.get_config_hash(node)
+                is_active = (node_hash == active_hash and active_hash != "")
+
+                # 传入 is_active 参数
+                self.scroll_layout.addWidget(NodeWidget(node, self, idx, is_active))
 
     def add_node(self):
         dialog = NodeEditorDialog(self)
@@ -338,6 +433,14 @@ class MainWindow(QMainWindow):
 
     def update_node(self, index, new_data):
         self.nodes[index] = new_data
+        ConfigManager.save_nodes(self.nodes)
+        self.refresh_list()
+
+    def duplicate_node(self, index):
+        new_data = copy.deepcopy(self.nodes[index])
+        original_name = new_data.get('name', '未命名')
+        new_data['name'] = f"{original_name} [backup]"
+        self.nodes.insert(index + 1, new_data)
         ConfigManager.save_nodes(self.nodes)
         self.refresh_list()
 
@@ -356,13 +459,16 @@ class MainWindow(QMainWindow):
     def on_apply_finished(self, success, message, source_btn):
         if self.loading_dialog: self.loading_dialog.close()
         if source_btn: source_btn.setEnabled(True)
+
+        # [修改] 无论成功失败，都刷新列表以更新“当前启用”的状态显示
+        self.refresh_list()
+
         if success:
             if "无需重复" not in message: QMessageBox.information(self, "成功", message)
         else:
             QMessageBox.critical(self, "错误", message)
 
     def view_env(self):
-        # 优化后的查看命令：同时显示当前进程视角和系统注册表视角，方便排查
         ps_script = """
         Write-Host '==========================================' -ForegroundColor Cyan
         Write-Host '   当前查看器进程视角 (Process View)' -ForegroundColor Cyan
@@ -384,14 +490,9 @@ class MainWindow(QMainWindow):
         Read-Host '按回车键关闭...'
         """
 
-        # 将多行脚本转为单行 Base64 编码，避免特殊字符问题 (更稳健的方式)
-        # 这里简单起见，使用 -Command 和分号拼接，但为了显示效果，我们构造一个临时文件也行
-        # 或者直接传递清晰的 Command
-
         cmd = f'powershell -NoProfile -Command "& {{ {ps_script} }}"'
 
         try:
-            # 传入当前更新过的 os.environ，确保"进程视角"是新的
             subprocess.Popen(cmd, creationflags=16, env=os.environ)
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开PowerShell: {e}")
