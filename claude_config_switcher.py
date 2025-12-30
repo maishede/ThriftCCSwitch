@@ -41,7 +41,7 @@ class Utils:
     def get_config_hash(data):
         """计算配置字典的MD5哈希"""
         clean_data = {k: data.get(k) for k in [
-            'api_key', 'base_url', 'haiku_model', 'sonnet_model', 'opus_model'
+            'api_key', 'base_url', 'haiku_model', 'sonnet_model', 'opus_model', 'http_proxy'
         ]}
         s = json.dumps(clean_data, sort_keys=True)
         return hashlib.md5(s.encode('utf-8')).hexdigest()
@@ -72,6 +72,12 @@ class ApplierThread(QThread):
                 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'
             }
 
+            # 添加代理环境变量
+            http_proxy = self.node_data.get('http_proxy', '')
+            if http_proxy:
+                env_vars['HTTP_PROXY'] = http_proxy
+                env_vars['HTTPS_PROXY'] = http_proxy
+
             try:
                 key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
                 for name, value in env_vars.items():
@@ -96,6 +102,16 @@ class ApplierThread(QThread):
         os.environ['ANTHROPIC_AUTH_TOKEN'] = self.node_data.get('api_key', '')
         os.environ['ANTHROPIC_BASE_URL'] = self.node_data.get('base_url', 'https://open.bigmodel.cn/api/anthropic')
         os.environ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] = '1'
+
+        # 设置代理环境变量
+        http_proxy = self.node_data.get('http_proxy', '')
+        if http_proxy:
+            os.environ['HTTP_PROXY'] = http_proxy
+            os.environ['HTTPS_PROXY'] = http_proxy
+        else:
+            # 清除代理环境变量
+            os.environ.pop('HTTP_PROXY', None)
+            os.environ.pop('HTTPS_PROXY', None)
 
     def update_json_config(self):
         if not os.path.exists(CLAUDE_DIR): os.makedirs(CLAUDE_DIR)
@@ -201,6 +217,15 @@ class ProxyCreatorDialog(QDialog):
         self.opus_edit = QLineEdit()
         self.opus_edit.setPlaceholderText("牛逼的模型例如: glm-4.7")
 
+        # 5. HTTP代理配置
+        self.use_proxy_check = QCheckBox("使用HTTP代理")
+        self.use_proxy_check.setChecked(False)
+        self.use_proxy_check.stateChanged.connect(self.on_proxy_check_changed)
+
+        self.proxy_edit = QLineEdit()
+        self.proxy_edit.setPlaceholderText("例如: http://127.0.0.1:7890")
+        self.proxy_edit.setVisible(False)
+
         form_layout.addRow("监听端口:", self.port_spin)
         form_layout.addRow("", self.lan_check)
         form_layout.addRow("目标 URL:", self.target_url_edit)
@@ -208,6 +233,8 @@ class ProxyCreatorDialog(QDialog):
         form_layout.addRow("Haiku 映射:", self.haiku_edit)
         form_layout.addRow("Sonnet 映射:", self.sonnet_edit)
         form_layout.addRow("Opus 映射:", self.opus_edit)
+        form_layout.addRow("", self.use_proxy_check)
+        form_layout.addRow("代理地址:", self.proxy_edit)
 
         layout.addLayout(form_layout)
 
@@ -228,6 +255,12 @@ class ProxyCreatorDialog(QDialog):
 
         self.setLayout(layout)
         self.node_data = None
+
+    def on_proxy_check_changed(self, state):
+        """代理checkbox状态改变时显示/隐藏代理输入框"""
+        self.proxy_edit.setVisible(state == Qt.Checked)
+        if state == Qt.Checked:
+            self.proxy_edit.setFocus()
 
     def generate_proxy(self):
         port = self.port_spin.value()
@@ -336,6 +369,9 @@ pause
             with open(bat_path, "w", encoding="gbk") as f:
                 f.write(bat_content)
 
+            # 获取代理配置
+            proxy_value = self.proxy_edit.text().strip() if self.use_proxy_check.isChecked() else ''
+
             self.node_data = {
                 'name': f"本地代理 [Port {port}]",
                 'api_key': "sk-litellm-proxy",
@@ -343,6 +379,7 @@ pause
                 'haiku_model': m_haiku,
                 'sonnet_model': m_sonnet,
                 'opus_model': m_opus,
+                'http_proxy': proxy_value,
                 'proxy_path': bat_path
             }
 
@@ -368,6 +405,7 @@ class NodeEditorDialog(QDialog):
                 padding: 6px; font-size: 13px;
             }
             QLineEdit:focus { border: 1px solid #3498db; }
+            QCheckBox { font-size: 13px; padding: 5px; }
         """)
         self.node_data = node_data or {}
         layout = QFormLayout()
@@ -380,12 +418,24 @@ class NodeEditorDialog(QDialog):
         self.sonnet_edit = QLineEdit(self.node_data.get('sonnet_model', 'glm-4.7'))
         self.opus_edit = QLineEdit(self.node_data.get('opus_model', 'glm-4.7'))
 
+        # 代理配置
+        self.use_proxy_check = QCheckBox("使用HTTP代理")
+        self.use_proxy_check.setChecked(bool(self.node_data.get('http_proxy', '')))
+        self.use_proxy_check.stateChanged.connect(self.on_proxy_check_changed)
+
+        self.proxy_edit = QLineEdit(self.node_data.get('http_proxy', ''))
+        self.proxy_edit.setPlaceholderText("例如: http://127.0.0.1:7890")
+        # 初始显示状态
+        self.proxy_edit.setVisible(self.use_proxy_check.isChecked())
+
         layout.addRow("节点名称:", self.name_edit)
         layout.addRow("API Key:", self.key_edit)
         layout.addRow("Base URL:", self.url_edit)
         layout.addRow("Haiku Model:", self.haiku_edit)
         layout.addRow("Sonnet Model:", self.sonnet_edit)
         layout.addRow("Opus Model:", self.opus_edit)
+        layout.addRow("", self.use_proxy_check)
+        layout.addRow("代理地址:", self.proxy_edit)
 
         btn_box = QHBoxLayout()
         save_btn = QPushButton("保存")
@@ -397,11 +447,18 @@ class NodeEditorDialog(QDialog):
         layout.addRow(btn_box)
         self.setLayout(layout)
 
+    def on_proxy_check_changed(self, state):
+        """代理checkbox状态改变时显示/隐藏代理输入框"""
+        self.proxy_edit.setVisible(state == Qt.Checked)
+        if state == Qt.Checked:
+            self.proxy_edit.setFocus()
+
     def get_data(self):
+        proxy_value = self.proxy_edit.text().strip() if self.use_proxy_check.isChecked() else ''
         return {
             'name': self.name_edit.text(), 'api_key': self.key_edit.text(), 'base_url': self.url_edit.text(),
             'haiku_model': self.haiku_edit.text(), 'sonnet_model': self.sonnet_edit.text(),
-            'opus_model': self.opus_edit.text(),
+            'opus_model': self.opus_edit.text(), 'http_proxy': proxy_value,
             'proxy_path': self.node_data.get('proxy_path', '')
         }
 
@@ -606,6 +663,15 @@ class MainWindow(QMainWindow):
                 }
                 for name, value in env_vars.items():
                     os.environ[name] = value
+
+                # 设置代理环境变量
+                http_proxy = target_node.get('http_proxy', '')
+                if http_proxy:
+                    os.environ['HTTP_PROXY'] = http_proxy
+                    os.environ['HTTPS_PROXY'] = http_proxy
+                else:
+                    os.environ.pop('HTTP_PROXY', None)
+                    os.environ.pop('HTTPS_PROXY', None)
 
                 # 可选：打印日志或状态栏提示
                 # print("Startup: Environment variables synced from active config.")
