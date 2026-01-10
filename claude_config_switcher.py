@@ -803,6 +803,11 @@ class MainWindow(QMainWindow):
         self.proxy_processes.append((process, port, window_title))
 
     def closeEvent(self, event: QCloseEvent):
+        # 如果代理池已启用，先恢复环境变量为当前节点配置
+        # 防止下次用户打开终端时环境变量指向已关闭的代理池
+        if PoolConfig.is_enabled():
+            self.restore_env_from_current_node()
+
         # 终止所有代理进程（包括代理池）
         if self.proxy_processes:
             self.kill_all_proxy_processes()
