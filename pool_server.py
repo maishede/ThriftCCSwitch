@@ -142,8 +142,7 @@ async def proxy_request(request: Request, path: str):
                 method=request.method,
                 url=url,
                 headers=headers,
-                content=body,
-                params=request.url.params if request.url.query else None
+                content=body
             )
 
             # Return response
