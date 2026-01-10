@@ -806,10 +806,42 @@ class MainWindow(QMainWindow):
         # 终止所有代理进程（包括代理池）
         if self.proxy_processes:
             self.kill_all_proxy_processes()
+
+        # 强制终止代理池进程（通过端口查找）
+        self.kill_pool_by_port()
+
         # 重置代理池状态
         if PoolConfig.is_enabled():
             PoolConfig.set_enabled(False)
-        event.accept()
+
+        # 强制退出Python进程
+        import sys
+        sys.exit(0)
+
+    def kill_pool_by_port(self):
+        """通过端口查找并终止代理池进程"""
+        try:
+            import subprocess
+            port = PoolConfig.get_port()
+            # 使用netstat查找监听该端口的进程
+            result = subprocess.run(
+                f'netstat -ano | findstr ":{port}" | findstr "LISTENING"',
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout:
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            pid = parts[-1]
+                            try:
+                                subprocess.run(f'taskkill /F /PID {pid}', shell=True, capture_output=True)
+                            except:
+                                pass
+        except Exception as e:
+            print(f"通过端口终止代理池失败: {e}")
 
     def kill_all_proxy_processes(self):
         """终止所有代理进程及其子进程"""
@@ -1063,7 +1095,12 @@ class MainWindow(QMainWindow):
 
     def update_pool_status_ui(self):
         """更新代理池状态UI"""
-        if PoolConfig.is_enabled():
+        # 检查端口是否真的在监听
+        port = PoolConfig.get_port()
+        is_running = self.check_pool_running(port)
+
+        # 更新状态显示
+        if is_running:
             self.pool_status_label.setText("代理池: 运行中 ✓")
             self.pool_status_label.setStyleSheet("font-size: 13px; color: #27ae60; font-weight: bold;")
             self.pool_toggle_btn.setText("关闭代理池")
@@ -1080,6 +1117,9 @@ class MainWindow(QMainWindow):
                 }
             """)
             self.pool_port_spin.setEnabled(False)
+            # 确保配置文件状态正确
+            if not PoolConfig.is_enabled():
+                PoolConfig.set_enabled(True)
         else:
             self.pool_status_label.setText("代理池: 已关闭")
             self.pool_status_label.setStyleSheet("font-size: 13px; color: #666; font-weight: bold;")
@@ -1097,6 +1137,21 @@ class MainWindow(QMainWindow):
                 }
             """)
             self.pool_port_spin.setEnabled(True)
+            # 确保配置文件状态正确
+            if PoolConfig.is_enabled():
+                PoolConfig.set_enabled(False)
+
+    def check_pool_running(self, port):
+        """检查代理池端口是否在监听"""
+        try:
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(('127.0.0.1', port))
+            sock.close()
+            return result == 0
+        except:
+            return False
 
     def on_pool_port_changed(self, port):
         """端口配置变化"""
