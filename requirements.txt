@@ -12,6 +12,10 @@ fastapi==0.121.3
 uvicorn==0.31.1
 PyYAML==6.0.3
 backoff==2.2.1
+orjson==3.10.7
+click==8.1.7
+datasets==2.20.0
+tokenizers==0.19.0
 
 # HTTP 请求 (代理池重载功能)
 requests==2.32.3
