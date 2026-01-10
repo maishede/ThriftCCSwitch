@@ -54,7 +54,7 @@ def generate_litellm_config(target: Dict[str, Any]) -> Dict[str, Any]:
     base_url = target.get('base_url', '')
     models = []
 
-    # Check if target is Anthropic-compatible
+    # Check if target is Anthropic-compatible endpoint (but not real Anthropic)
     is_anthropic_compatible = '/anthropic' in base_url or 'anthropic' in base_url.lower()
 
     # Build model mapping list
@@ -62,17 +62,17 @@ def generate_litellm_config(target: Dict[str, Any]) -> Dict[str, Any]:
         model_name = target.get(model_type, '')
         if model_name:
             if is_anthropic_compatible:
-                # Anthropic-compatible: use original model name
+                # For Anthropic-compatible endpoints (like Zhipu), use anthropic provider
                 models.append({
                     "model_name": model_name,
                     "litellm_params": {
-                        "model": model_name,
+                        "model": f"anthropic/{model_name}",
                         "api_key": api_key,
                         "api_base": base_url
                     }
                 })
             else:
-                # OpenAI-compatible: use openai/ prefix
+                # For OpenAI-compatible endpoints
                 models.append({
                     "model_name": model_name,
                     "litellm_params": {
@@ -88,7 +88,7 @@ def generate_litellm_config(target: Dict[str, Any]) -> Dict[str, Any]:
             models.append({
                 "model_name": "*",
                 "litellm_params": {
-                    "model": "*",
+                    "model": "anthropic/*",
                     "api_key": api_key,
                     "api_base": base_url
                 }
