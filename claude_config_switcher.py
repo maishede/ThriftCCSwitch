@@ -1159,6 +1159,10 @@ class MainWindow(QMainWindow):
 
     def toggle_pool(self):
         """切换代理池状态"""
+        # 防抖：检查是否正在操作中
+        if hasattr(self, '_pool_operating') and self._pool_operating:
+            return
+
         if PoolConfig.is_enabled():
             self.stop_pool()
         else:
@@ -1166,6 +1170,9 @@ class MainWindow(QMainWindow):
 
     def start_pool(self):
         """启动代理池"""
+        # 防抖：设置操作中标志
+        self._pool_operating = True
+
         try:
             # 获取当前激活的节点
             active_hash = self.get_active_hash()
@@ -1254,9 +1261,15 @@ pause
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"启动代理池失败: {e}")
+        finally:
+            # 清除操作中标志
+            self._pool_operating = False
 
     def stop_pool(self):
         """停止代理池"""
+        # 防抖：设置操作中标志
+        self._pool_operating = True
+
         try:
             # 终止代理池进程
             self.kill_pool_process()
@@ -1273,6 +1286,9 @@ pause
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"关闭代理池失败: {e}")
+        finally:
+            # 清除操作中标志
+            self._pool_operating = False
 
     def apply_pool_config_to_env(self, node_data):
         """将代理池配置应用到环境变量"""
