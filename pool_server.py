@@ -130,10 +130,18 @@ async def proxy_request(request: Request, path: str):
     # Get request body
     body = await request.body()
 
-    # Build headers
-    headers = dict(request.headers)
-    headers.pop('host', None)  # Remove host header
-    headers['x-api-key'] = target_config.get('api_key', '')  # Override API key
+    # Build headers - remove auth headers and use target API key
+    headers = {}
+    for key, value in request.headers.items():
+        # Skip auth-related headers
+        if key.lower() in ['host', 'x-api-key', 'authorization']:
+            continue
+        # Copy other headers
+        headers[key] = value
+
+    # Add target API key
+    api_key = target_config.get('api_key', '')
+    headers['x-api-key'] = api_key
 
     # Forward request
     async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
@@ -145,11 +153,16 @@ async def proxy_request(request: Request, path: str):
                 content=body
             )
 
-            # Return response
+            # Return response (filter out hop-by-hop headers)
+            response_headers = {}
+            for key, value in response.headers.items():
+                if key.lower() not in ['content-encoding', 'transfer-encoding', 'connection']:
+                    response_headers[key] = value
+
             return Response(
                 content=response.content,
                 status_code=response.status_code,
-                headers=dict(response.headers)
+                headers=response_headers
             )
 
         except httpx.HTTPError as e:
