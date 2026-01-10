@@ -78,3 +78,11 @@ python build.py
 - PyQt5 - 图形界面
 - psutil - 进程管理
 - litellm - 代理服务（仅本地代理功能需要）
+
+## 开发者备忘
+
+**版本开发流程：**
+1. 基于main创建开发分支：`git checkout -b dev/{版本号}`
+2. 在开发分支开发，完成后合并回main
+3. 在main上打tag：`git tag v{版本号}`
+4. 推送代码和tag
