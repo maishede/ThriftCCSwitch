@@ -11,6 +11,7 @@ litellm-proxy-extras==0.4.16
 fastapi==0.121.3
 uvicorn==0.31.1
 PyYAML==6.0.3
+backoff==2.2.1
 
 # HTTP 请求 (代理池重载功能)
 requests==2.32.3
