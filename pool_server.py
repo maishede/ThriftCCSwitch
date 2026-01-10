@@ -143,6 +143,31 @@ async def proxy_request(request: Request, path: str):
     api_key = target_config.get('api_key', '')
     headers['x-api-key'] = api_key
 
+    # Model name mapping (standard Anthropic models -> target platform models)
+    if body and request.method in ["POST", "PUT", "PATCH"]:
+        try:
+            import json
+            body_dict = json.loads(body)
+
+            # Map standard Anthropic model names to target platform models
+            model_mapping = {
+                'claude-haiku-4-20250514': target_config.get('haiku_model'),
+                'claude-sonnet-4-20250514': target_config.get('sonnet_model'),
+                'claude-opus-4-20250514': target_config.get('opus_model'),
+            }
+
+            model = body_dict.get('model', '')
+            if model in model_mapping:
+                target_model = model_mapping[model]
+                if target_model:
+                    body_dict['model'] = target_model
+                    body = json.dumps(body_dict).encode('utf-8')
+                    # Update content-length header
+                    headers['content-length'] = str(len(body))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # If body is not JSON, pass it through unchanged
+            pass
+
     # Forward request
     async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
         try:

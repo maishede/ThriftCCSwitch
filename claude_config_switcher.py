@@ -19,6 +19,13 @@ APP_NAME = "ThriftCCSwitch"
 APPDATA = os.getenv('APPDATA')
 USER_PROFILE = os.path.expanduser('~')
 
+# 标准的 Anthropic 模型名（用于代理池模式）
+STANDARD_ANTHROPIC_MODELS = {
+    'haiku': 'claude-haiku-4-20250514',
+    'sonnet': 'claude-sonnet-4-20250514',
+    'opus': 'claude-opus-4-20250514'
+}
+
 # 1. 确保配置目录结构清晰
 APP_DIR = os.path.join(APPDATA, '.ThriftCCSwitch')
 DATA_FILE = os.path.join(APP_DIR, 'nodes.json')
@@ -161,9 +168,9 @@ class ApplierThread(QThread):
             last_hash = self.load_last_hash()
 
             # 检查代理池状态
-            pool_enabled = PoolConfig.is_enabled()
+            self.pool_mode = PoolConfig.is_enabled()
 
-            if pool_enabled:
+            if self.pool_mode:
                 # 代理池模式：更新代理池目标
                 if not self.force_update and current_hash == last_hash:
                     self.finished_signal.emit(True, "当前配置已是最新 (无需重复应用)。")
@@ -174,7 +181,7 @@ class ApplierThread(QThread):
 
                 # 触发代理池重载
                 if PoolConfig.reload_pool():
-                    # 更新状态和配置文件（但不修改环境变量）
+                    # 更新状态和配置文件（使用标准模型名）
                     self.update_json_config()
                     self.save_current_state(current_hash)
                     self.finished_signal.emit(True, "代理池目标已更新！")
@@ -246,9 +253,15 @@ class ApplierThread(QThread):
 
         if "env" not in settings_content: settings_content["env"] = {}
 
-        settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = self.node_data.get('haiku_model', '')
-        settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = self.node_data.get('sonnet_model', '')
-        settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = self.node_data.get('opus_model', '')
+        # 代理池模式下使用标准 Anthropic 模型名，否则使用节点配置的模型名
+        if hasattr(self, 'pool_mode') and self.pool_mode:
+            settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = STANDARD_ANTHROPIC_MODELS['haiku']
+            settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = STANDARD_ANTHROPIC_MODELS['sonnet']
+            settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = STANDARD_ANTHROPIC_MODELS['opus']
+        else:
+            settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = self.node_data.get('haiku_model', '')
+            settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = self.node_data.get('sonnet_model', '')
+            settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = self.node_data.get('opus_model', '')
 
         with open(CLAUDE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(settings_content, f, indent=4)
@@ -1021,9 +1034,28 @@ class MainWindow(QMainWindow):
                 self.refresh_list()
 
     def update_node(self, index, new_data):
+        old_data = self.nodes[index]
         self.nodes[index] = new_data
         ConfigManager.save_nodes(self.nodes)
         self.refresh_list()
+
+        # 检查是否需要同步到代理池
+        if self._should_sync_to_pool(new_data):
+            try:
+                # 更新代理池目标配置
+                PoolConfig.save_target(new_data)
+
+                # 触发代理池热重载
+                if PoolConfig.reload_pool():
+                    # 静默更新，不弹窗，但可以在状态栏显示
+                    print(f"[INFO] 节点配置已同步到代理池: {new_data.get('name')}")
+                else:
+                    QMessageBox.warning(self, "代理池同步失败",
+                        f"节点配置已保存，但同步到代理池失败。\n\n"
+                        f"请检查代理池是否正常运行。")
+            except Exception as e:
+                QMessageBox.warning(self, "代理池同步失败",
+                    f"节点配置已保存，但同步到代理池时出错：\n{e}")
 
     def duplicate_node(self, index):
         new_data = copy.deepcopy(self.nodes[index])
@@ -1034,6 +1066,32 @@ class MainWindow(QMainWindow):
         self.refresh_list()
 
     def delete_node(self, index):
+        node_to_delete = self.nodes[index]
+
+        # 检查是否是当前激活节点
+        active_hash = self.get_active_hash()
+        node_hash = Utils.get_config_hash(node_to_delete)
+
+        if active_hash == node_hash:
+            # 如果代理池开启，阻止删除
+            if PoolConfig.is_enabled():
+                QMessageBox.warning(self, "无法删除",
+                    f"无法删除当前激活的节点「{node_to_delete.get('name')}」。\n\n"
+                    f"请先关闭代理池或切换到其他节点后再删除。")
+                return
+
+            # 代理池未开启，允许删除但警告
+            reply = QMessageBox.question(self, "确认删除",
+                f"「{node_to_delete.get('name')}」是当前激活的节点。\n\n"
+                f"删除后需要重新应用其他节点，否则环境变量可能指向不存在的配置。\n\n"
+                f"确定要删除吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No)
+
+            if reply == QMessageBox.No:
+                return
+
+        # 执行删除
         del self.nodes[index]
         ConfigManager.save_nodes(self.nodes)
         self.refresh_list()
@@ -1210,21 +1268,18 @@ class MainWindow(QMainWindow):
 
             bat_content = f"""@echo off
 cd /d "{os.path.dirname(__file__)}"
-title ThriftCCSwitch Pool Server (Port {port})
-echo Starting Proxy Pool Server...
-echo Port: {port}
-echo.
-"{sys.executable}" "{server_script}" --port {port}
-pause
+"{sys.executable}" "{server_script}" --port {port} 2> error.log
 """
             bat_path = os.path.join(pool_dir, 'start_pool.bat')
             with open(bat_path, 'w', encoding='gbk') as f:
                 f.write(bat_content)
 
-            # 使用 subprocess 启动，显示新窗口
+            # 使用 subprocess 启动，隐藏窗口（后台运行）
             p = subprocess.Popen(
                 ['cmd', '/c', bat_path],
-                creationflags=subprocess.CREATE_NEW_CONSOLE
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
             )
 
             # 注册代理池进程
@@ -1236,12 +1291,23 @@ pause
 
             # 检查进程是否还在运行
             if p.poll() is not None:
+                # 读取错误日志
+                error_log = os.path.join(pool_dir, 'error.log')
+                error_msg = ""
+                if os.path.exists(error_log):
+                    try:
+                        with open(error_log, 'r', encoding='utf-8') as f:
+                            error_msg = f.read()
+                    except:
+                        pass
+
                 QMessageBox.warning(self, "启动失败",
                     f"代理池服务启动后立即退出。\n\n"
-                    f"请检查新打开的窗口中的错误信息。\n\n"
                     f"可能原因：\n"
-                    f"1. 缺少依赖（运行: pip install litellm[proxy]）\n"
-                    f"2. 端口 {port} 被占用"
+                    f"1. 缺少依赖（运行: pip install -r requirements.txt）\n"
+                    f"2. 端口 {port} 被占用\n"
+                    f"3. 配置文件错误\n\n"
+                    f"错误信息：\n{error_msg if error_msg else '(无法读取错误日志)'}"
                 )
                 PoolConfig.set_enabled(False)
                 self.update_pool_status_ui()
@@ -1253,15 +1319,17 @@ pause
             # 应用代理池配置到环境变量
             self.apply_pool_config_to_env(current_node)
 
+            # 更新 settings.json 为标准模型名
+            self.update_pool_settings_json()
+
             self.update_pool_status_ui()
 
             QMessageBox.information(self, "成功",
-                f"代理池已启动！\n\n"
+                f"代理池已启动（后台运行）！\n\n"
                 f"端口: {port}\n"
                 f"地址: http://127.0.0.1:{port}\n"
                 f"Key: {PoolConfig.get_key()}\n\n"
-                f"环境变量已指向代理池。\n"
-                f"请检查新打开的窗口确认服务正常运行。"
+                f"环境变量已指向代理池。"
             )
 
         except Exception as e:
@@ -1318,6 +1386,34 @@ pause
         except Exception as e:
             raise Exception(f"环境变量设置失败: {e}")
 
+    def update_pool_settings_json(self):
+        """更新 settings.json 为标准 Anthropic 模型名（代理池模式）"""
+        try:
+            if not os.path.exists(CLAUDE_DIR):
+                os.makedirs(CLAUDE_DIR)
+
+            settings_content = {}
+            if os.path.exists(CLAUDE_SETTINGS_FILE):
+                try:
+                    with open(CLAUDE_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                        settings_content = json.load(f)
+                except:
+                    pass
+
+            if "env" not in settings_content:
+                settings_content["env"] = {}
+
+            # 使用标准 Anthropic 模型名
+            settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = STANDARD_ANTHROPIC_MODELS['haiku']
+            settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = STANDARD_ANTHROPIC_MODELS['sonnet']
+            settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = STANDARD_ANTHROPIC_MODELS['opus']
+
+            with open(CLAUDE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(settings_content, f, indent=4)
+
+        except Exception as e:
+            print(f"更新 settings.json 失败: {e}")
+
     def restore_env_from_current_node(self):
         """从当前节点恢复环境变量"""
         try:
@@ -1355,6 +1451,22 @@ pause
 
         except Exception as e:
             print(f"恢复环境变量失败: {e}")
+
+    def _should_sync_to_pool(self, node_data):
+        """判断是否需要同步到代理池"""
+        if not PoolConfig.is_enabled():
+            return False
+
+        # 获取当前激活节点的 hash
+        active_hash = self.get_active_hash()
+        if not active_hash:
+            return False
+
+        # 计算当前节点的 hash
+        current_hash = Utils.get_config_hash(node_data)
+
+        # 如果是同一个节点，需要同步
+        return active_hash == current_hash
 
     def kill_pool_process(self):
         """终止代理池进程"""
