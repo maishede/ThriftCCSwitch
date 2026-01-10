@@ -1136,15 +1136,28 @@ class MainWindow(QMainWindow):
             port = PoolConfig.get_port()
             server_script = os.path.join(os.path.dirname(__file__), 'pool_server.py')
 
-            # 使用 subprocess 启动，隐藏窗口
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
+            # 生成启动脚本
+            pool_dir = os.path.join(PROXIES_DIR, 'pool')
+            if not os.path.exists(pool_dir):
+                os.makedirs(pool_dir)
 
+            bat_content = f"""@echo off
+cd /d "{os.path.dirname(__file__)}"
+title ThriftCCSwitch Pool Server (Port {port})
+echo Starting Proxy Pool Server...
+echo Port: {port}
+echo.
+"{sys.executable}" "{server_script}" {port}
+pause
+"""
+            bat_path = os.path.join(pool_dir, 'start_pool.bat')
+            with open(bat_path, 'w', encoding='gbk') as f:
+                f.write(bat_content)
+
+            # 使用 subprocess 启动，显示新窗口
             p = subprocess.Popen(
-                [sys.executable, server_script, str(port)],
-                startupinfo=startupinfo,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                ['cmd', '/c', bat_path],
+                creationflags=subprocess.CREATE_NEW_CONSOLE
             )
 
             # 注册代理池进程
@@ -1152,7 +1165,20 @@ class MainWindow(QMainWindow):
 
             # 等待服务启动
             import time
-            time.sleep(2)
+            time.sleep(3)
+
+            # 检查进程是否还在运行
+            if p.poll() is not None:
+                QMessageBox.warning(self, "启动失败",
+                    f"代理池服务启动后立即退出。\n\n"
+                    f"请检查新打开的窗口中的错误信息。\n\n"
+                    f"可能原因：\n"
+                    f"1. 缺少依赖（运行: pip install litellm[proxy]）\n"
+                    f"2. 端口 {port} 被占用"
+                )
+                PoolConfig.set_enabled(False)
+                self.update_pool_status_ui()
+                return
 
             # 设置代理池为启用状态
             PoolConfig.set_enabled(True)
@@ -1167,7 +1193,8 @@ class MainWindow(QMainWindow):
                 f"端口: {port}\n"
                 f"地址: http://127.0.0.1:{port}\n"
                 f"Key: {PoolConfig.get_key()}\n\n"
-                f"环境变量已指向代理池。"
+                f"环境变量已指向代理池。\n"
+                f"请检查新打开的窗口确认服务正常运行。"
             )
 
         except Exception as e:
