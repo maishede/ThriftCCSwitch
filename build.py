@@ -54,8 +54,36 @@ def build():
 
     print("🚀 正在开始打包...")
 
-    # 3. 组装命令 (等同于在命令行输入)
-    # 使用 sys.executable 确保调用的是当前环境的 Python
+    # 3. 排除不需要的模块列表
+    excluded_modules = [
+        # 代理池服务相关（独立运行，不需要打包）
+        "litellm", "fastapi", "uvicorn", "httpx", "yaml",
+
+        # 数据科学包（主程序不需要）
+        "numpy", "pandas", "scipy", "matplotlib",
+        "sklearn", "skimage", "statsmodels",
+
+        # 深度学习框架（主程序不需要）
+        "torch", "torchvision", "torchaudio",
+        "tensorflow", "keras",
+
+        # 开发工具（主程序不需要）
+        "IPython", "jedi", "parso", "prompt_toolkit",
+
+        # 其他不需要的包
+        "tensorflow",
+        "tensorboard",
+        "datasets",
+        "tokenizers",
+        "transformers",
+        "PIL",  # Pillow，如果主程序不处理图片
+        "cv2",  # opencv
+        "openpyxl",
+        "botocore",
+        "fsspec",
+    ]
+
+    # 4. 组装命令
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "-F",  # 单文件
@@ -63,8 +91,14 @@ def build():
         "--clean",  # 清理缓存
         "--noconfirm",  # 不询问覆盖
         "--name", exe_name,
-        script_file
     ]
+
+    # 添加所有排除模块
+    for module in excluded_modules:
+        cmd.extend(["--exclude-module", module])
+
+    # 添加脚本文件
+    cmd.append(script_file)
 
     try:
         # 执行命令
