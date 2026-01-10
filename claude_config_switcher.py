@@ -138,7 +138,7 @@ class PoolConfig:
         """触发代理池重载"""
         import requests
         try:
-            url = f"{PoolConfig.get_pool_url()}/reload"
+            url = f"{PoolConfig.get_pool_url()}/__/reload"
             requests.post(url, timeout=5)
             return True
         except Exception as e:
