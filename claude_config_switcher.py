@@ -47,6 +47,105 @@ class Utils:
         return hashlib.md5(s.encode('utf-8')).hexdigest()
 
 
+# --- 代理池配置管理 ---
+class PoolConfig:
+    """代理池配置管理类"""
+
+    CONFIG_FILE = os.path.join(APP_DIR, 'pool_config.json')
+    TARGET_FILE = os.path.join(APP_DIR, 'pool_target.json')
+    DEFAULT_PORT = 8899
+
+    @staticmethod
+    def get_config():
+        """获取代理池配置，如果不存在则创建默认配置"""
+        if os.path.exists(PoolConfig.CONFIG_FILE):
+            with open(PoolConfig.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            # 创建默认配置
+            config = {
+                'enabled': False,
+                'port': PoolConfig.DEFAULT_PORT,
+                'key': PoolConfig._generate_key()
+            }
+            PoolConfig.save_config(config)
+            return config
+
+    @staticmethod
+    def save_config(config):
+        """保存代理池配置"""
+        with open(PoolConfig.CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _generate_key():
+        """生成代理池key"""
+        import secrets
+        return f"sk-pool-{secrets.token_hex(8)}"
+
+    @staticmethod
+    def is_enabled():
+        """检查代理池是否启用"""
+        config = PoolConfig.get_config()
+        return config.get('enabled', False)
+
+    @staticmethod
+    def set_enabled(enabled: bool):
+        """设置代理池启用状态"""
+        config = PoolConfig.get_config()
+        config['enabled'] = enabled
+        PoolConfig.save_config(config)
+
+    @staticmethod
+    def get_port():
+        """获取代理池端口"""
+        config = PoolConfig.get_config()
+        return config.get('port', PoolConfig.DEFAULT_PORT)
+
+    @staticmethod
+    def set_port(port: int):
+        """设置代理池端口"""
+        config = PoolConfig.get_config()
+        config['port'] = port
+        PoolConfig.save_config(config)
+
+    @staticmethod
+    def get_key():
+        """获取代理池key"""
+        config = PoolConfig.get_config()
+        return config.get('key', '')
+
+    @staticmethod
+    def get_pool_url():
+        """获取代理池URL"""
+        return f"http://127.0.0.1:{PoolConfig.get_port()}"
+
+    @staticmethod
+    def save_target(node_data):
+        """保存目标节点配置"""
+        target = {
+            'api_key': node_data.get('api_key', ''),
+            'base_url': node_data.get('base_url', ''),
+            'haiku_model': node_data.get('haiku_model', ''),
+            'sonnet_model': node_data.get('sonnet_model', ''),
+            'opus_model': node_data.get('opus_model', '')
+        }
+        with open(PoolConfig.TARGET_FILE, 'w', encoding='utf-8') as f:
+            json.dump(target, f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def reload_pool():
+        """触发代理池重载"""
+        import requests
+        try:
+            url = f"{PoolConfig.get_pool_url()}/reload"
+            requests.post(url, timeout=5)
+            return True
+        except Exception as e:
+            print(f"重载代理池失败: {e}")
+            return False
+
+
 # --- 核心线程：应用配置 ---
 class ApplierThread(QThread):
     finished_signal = pyqtSignal(bool, str)
@@ -61,39 +160,61 @@ class ApplierThread(QThread):
             current_hash = Utils.get_config_hash(self.node_data)
             last_hash = self.load_last_hash()
 
-            if not self.force_update and current_hash == last_hash:
-                self.update_process_env()
-                self.finished_signal.emit(True, "当前配置已是最新 (无需重复应用)。")
-                return
+            # 检查代理池状态
+            pool_enabled = PoolConfig.is_enabled()
 
-            env_vars = {
-                'ANTHROPIC_AUTH_TOKEN': self.node_data.get('api_key', ''),
-                'ANTHROPIC_BASE_URL': self.node_data.get('base_url', 'https://open.bigmodel.cn/api/anthropic'),
-                'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'
-            }
+            if pool_enabled:
+                # 代理池模式：更新代理池目标
+                if not self.force_update and current_hash == last_hash:
+                    self.finished_signal.emit(True, "当前配置已是最新 (无需重复应用)。")
+                    return
 
-            # 添加代理环境变量
-            http_proxy = self.node_data.get('http_proxy', '')
-            if http_proxy:
-                env_vars['HTTP_PROXY'] = http_proxy
-                env_vars['HTTPS_PROXY'] = http_proxy
+                # 保存目标配置
+                PoolConfig.save_target(self.node_data)
 
-            try:
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
+                # 触发代理池重载
+                if PoolConfig.reload_pool():
+                    # 更新状态和配置文件（但不修改环境变量）
+                    self.update_json_config()
+                    self.save_current_state(current_hash)
+                    self.finished_signal.emit(True, "代理池目标已更新！")
+                else:
+                    self.finished_signal.emit(False, "代理池重载失败，请检查代理池是否正常运行。")
+            else:
+                # 普通模式：直接修改环境变量
+                if not self.force_update and current_hash == last_hash:
+                    self.update_process_env()
+                    self.finished_signal.emit(True, "当前配置已是最新 (无需重复应用)。")
+                    return
+
+                env_vars = {
+                    'ANTHROPIC_AUTH_TOKEN': self.node_data.get('api_key', ''),
+                    'ANTHROPIC_BASE_URL': self.node_data.get('base_url', 'https://open.bigmodel.cn/api/anthropic'),
+                    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'
+                }
+
+                # 添加代理环境变量
+                http_proxy = self.node_data.get('http_proxy', '')
+                if http_proxy:
+                    env_vars['HTTP_PROXY'] = http_proxy
+                    env_vars['HTTPS_PROXY'] = http_proxy
+
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
+                    for name, value in env_vars.items():
+                        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+                    winreg.CloseKey(key)
+                    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 1000, 0)
+                except Exception as e:
+                    raise Exception(f"注册表写入失败: {e}")
+
+                # 更新当前进程
                 for name, value in env_vars.items():
-                    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
-                winreg.CloseKey(key)
-                ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 1000, 0)
-            except Exception as e:
-                raise Exception(f"注册表写入失败: {e}")
+                    os.environ[name] = value
 
-            # 更新当前进程
-            for name, value in env_vars.items():
-                os.environ[name] = value
-
-            self.update_json_config()
-            self.save_current_state(current_hash)
-            self.finished_signal.emit(True, "配置应用成功！")
+                self.update_json_config()
+                self.save_current_state(current_hash)
+                self.finished_signal.emit(True, "配置应用成功！")
 
         except Exception as e:
             self.finished_signal.emit(False, str(e))
@@ -682,8 +803,12 @@ class MainWindow(QMainWindow):
         self.proxy_processes.append((process, port, window_title))
 
     def closeEvent(self, event: QCloseEvent):
+        # 终止所有代理进程（包括代理池）
         if self.proxy_processes:
             self.kill_all_proxy_processes()
+        # 重置代理池状态
+        if PoolConfig.is_enabled():
+            PoolConfig.set_enabled(False)
         event.accept()
 
     def kill_all_proxy_processes(self):
@@ -763,6 +888,57 @@ class MainWindow(QMainWindow):
         self.scroll_layout.setAlignment(Qt.AlignTop)
         self.scroll_area.setWidget(self.scroll_content)
         main_layout.addWidget(self.scroll_area)
+
+        # --- 底部状态栏（代理池控制）---
+        self.pool_status_bar = QWidget()
+        self.pool_status_bar.setStyleSheet("background-color: #e8e8e8; border-top: 1px solid #ccc;")
+        pool_bar_layout = QHBoxLayout(self.pool_status_bar)
+        pool_bar_layout.setContentsMargins(15, 8, 15, 8)
+
+        # 状态标签
+        self.pool_status_label = QLabel("代理池: 已关闭")
+        self.pool_status_label.setStyleSheet("font-size: 13px; color: #666; font-weight: bold;")
+        pool_bar_layout.addWidget(self.pool_status_label)
+
+        pool_bar_layout.addStretch()
+
+        # 端口配置
+        port_label = QLabel("端口:")
+        port_label.setStyleSheet("font-size: 13px; color: #555;")
+        pool_bar_layout.addWidget(port_label)
+
+        self.pool_port_spin = QSpinBox()
+        self.pool_port_spin.setRange(1, 65535)
+        self.pool_port_spin.setValue(PoolConfig.get_port())
+        self.pool_port_spin.setMinimumWidth(80)
+        self.pool_port_spin.setStyleSheet("padding: 4px;")
+        self.pool_port_spin.valueChanged.connect(self.on_pool_port_changed)
+        pool_bar_layout.addWidget(self.pool_port_spin)
+
+        pool_bar_layout.addSpacing(20)
+
+        # 开关按钮
+        self.pool_toggle_btn = QPushButton("开启代理池")
+        self.pool_toggle_btn.setFixedSize(110, 32)
+        self.pool_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #2ecc71;
+            }
+        """)
+        self.pool_toggle_btn.clicked.connect(self.toggle_pool)
+        pool_bar_layout.addWidget(self.pool_toggle_btn)
+
+        # 更新初始状态
+        self.update_pool_status_ui()
+
+        main_layout.addWidget(self.pool_status_bar)
 
         self.refresh_list()
 
@@ -882,6 +1058,217 @@ class MainWindow(QMainWindow):
     def open_claude_folder(self):
         if not os.path.exists(CLAUDE_DIR): os.makedirs(CLAUDE_DIR)
         os.startfile(CLAUDE_DIR)
+
+    # --- 代理池相关方法 ---
+
+    def update_pool_status_ui(self):
+        """更新代理池状态UI"""
+        if PoolConfig.is_enabled():
+            self.pool_status_label.setText("代理池: 运行中 ✓")
+            self.pool_status_label.setStyleSheet("font-size: 13px; color: #27ae60; font-weight: bold;")
+            self.pool_toggle_btn.setText("关闭代理池")
+            self.pool_toggle_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #e74c3c;
+                    color: white;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background-color: #c0392b;
+                }
+            """)
+            self.pool_port_spin.setEnabled(False)
+        else:
+            self.pool_status_label.setText("代理池: 已关闭")
+            self.pool_status_label.setStyleSheet("font-size: 13px; color: #666; font-weight: bold;")
+            self.pool_toggle_btn.setText("开启代理池")
+            self.pool_toggle_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #27ae60;
+                    color: white;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background-color: #2ecc71;
+                }
+            """)
+            self.pool_port_spin.setEnabled(True)
+
+    def on_pool_port_changed(self, port):
+        """端口配置变化"""
+        PoolConfig.set_port(port)
+
+    def toggle_pool(self):
+        """切换代理池状态"""
+        if PoolConfig.is_enabled():
+            self.stop_pool()
+        else:
+            self.start_pool()
+
+    def start_pool(self):
+        """启动代理池"""
+        try:
+            # 获取当前激活的节点
+            active_hash = self.get_active_hash()
+            if not active_hash:
+                QMessageBox.warning(self, "提示", "请先应用一个配置节点后再开启代理池。")
+                return
+
+            # 找到激活的节点
+            current_node = None
+            for node in self.nodes:
+                if Utils.get_config_hash(node) == active_hash:
+                    current_node = node
+                    break
+
+            if not current_node:
+                QMessageBox.warning(self, "提示", "找不到当前激活的节点，请先应用一个配置。")
+                return
+
+            # 保存目标配置
+            PoolConfig.save_target(current_node)
+
+            # 启动代理池服务
+            port = PoolConfig.get_port()
+            server_script = os.path.join(os.path.dirname(__file__), 'pool_server.py')
+
+            # 使用 subprocess 启动，隐藏窗口
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            p = subprocess.Popen(
+                [sys.executable, server_script, str(port)],
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+
+            # 注册代理池进程
+            self.register_proxy_process(p, port, "ThriftCCSwitch-Pool")
+
+            # 等待服务启动
+            import time
+            time.sleep(2)
+
+            # 设置代理池为启用状态
+            PoolConfig.set_enabled(True)
+
+            # 应用代理池配置到环境变量
+            self.apply_pool_config_to_env(current_node)
+
+            self.update_pool_status_ui()
+
+            QMessageBox.information(self, "成功",
+                f"代理池已启动！\n\n"
+                f"端口: {port}\n"
+                f"地址: http://127.0.0.1:{port}\n"
+                f"Key: {PoolConfig.get_key()}\n\n"
+                f"环境变量已指向代理池。"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"启动代理池失败: {e}")
+
+    def stop_pool(self):
+        """停止代理池"""
+        try:
+            # 终止代理池进程
+            self.kill_pool_process()
+
+            # 设置代理池为禁用状态
+            PoolConfig.set_enabled(False)
+
+            # 恢复环境变量为当前节点
+            self.restore_env_from_current_node()
+
+            self.update_pool_status_ui()
+
+            QMessageBox.information(self, "提示", "代理池已关闭，环境变量已恢复为当前节点配置。")
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"关闭代理池失败: {e}")
+
+    def apply_pool_config_to_env(self, node_data):
+        """将代理池配置应用到环境变量"""
+        try:
+            env_vars = {
+                'ANTHROPIC_AUTH_TOKEN': PoolConfig.get_key(),
+                'ANTHROPIC_BASE_URL': PoolConfig.get_pool_url(),
+                'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'
+            }
+
+            # 写入注册表
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
+            for name, value in env_vars.items():
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+            winreg.CloseKey(key)
+            ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 1000, 0)
+
+            # 更新当前进程环境变量
+            for name, value in env_vars.items():
+                os.environ[name] = value
+
+        except Exception as e:
+            raise Exception(f"环境变量设置失败: {e}")
+
+    def restore_env_from_current_node(self):
+        """从当前节点恢复环境变量"""
+        try:
+            active_hash = self.get_active_hash()
+            if not active_hash:
+                return
+
+            # 找到激活的节点
+            current_node = None
+            for node in self.nodes:
+                if Utils.get_config_hash(node) == active_hash:
+                    current_node = node
+                    break
+
+            if not current_node:
+                return
+
+            # 恢复节点配置到环境变量
+            env_vars = {
+                'ANTHROPIC_AUTH_TOKEN': current_node.get('api_key', ''),
+                'ANTHROPIC_BASE_URL': current_node.get('base_url', ''),
+                'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'
+            }
+
+            # 写入注册表
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
+            for name, value in env_vars.items():
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+            winreg.CloseKey(key)
+            ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 1000, 0)
+
+            # 更新当前进程环境变量
+            for name, value in env_vars.items():
+                os.environ[name] = value
+
+        except Exception as e:
+            print(f"恢复环境变量失败: {e}")
+
+    def kill_pool_process(self):
+        """终止代理池进程"""
+        for i, (p, port, title) in enumerate(self.proxy_processes[:]):
+            if "Pool" in title and p.poll() is None:
+                try:
+                    import psutil
+                    parent = psutil.Process(p.pid)
+                    for child in parent.children(recursive=True):
+                        try:
+                            child.terminate()
+                        except psutil.NoSuchProcess:
+                            pass
+                    parent.terminate()
+                    self.proxy_processes.remove((p, port, title))
+                except Exception as e:
+                    print(f"终止代理池进程失败: {e}")
 
 
 if __name__ == '__main__':
