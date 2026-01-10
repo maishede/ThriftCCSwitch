@@ -1,18 +1,18 @@
 """
 ThriftCCSwitch Proxy Pool Server
 
-Proxy service with dynamic target switching based on litellm.
-Supports hot reload via internal /reload endpoint.
+Simple HTTP forwarding service for Anthropic-compatible endpoints.
+No litellm dependency - just straightforward request forwarding.
 """
 
 import os
 import sys
 import json
-import yaml
-import uvicorn
+import httpx
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request
-from typing import Optional, Dict, Any
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import StreamingResponse
+import uvicorn
 
 # Set UTF-8 encoding for Windows console
 if sys.platform == 'win32':
@@ -26,164 +26,39 @@ POOL_CONFIG_FILE = CONFIG_DIR / 'pool_config.json'
 POOL_TARGET_FILE = CONFIG_DIR / 'pool_target.json'
 
 # Global variables
-current_target: Optional[Dict[str, Any]] = None
-litellm_initialized = False
+target_config = None
 
 
-def load_pool_config() -> Dict[str, Any]:
+def load_pool_config():
     """Load proxy pool config"""
     if not POOL_CONFIG_FILE.exists():
         raise FileNotFoundError(f"Config file not found: {POOL_CONFIG_FILE}")
-
     with open(POOL_CONFIG_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-def load_target_config() -> Dict[str, Any]:
+def load_target_config():
     """Load target config"""
     if not POOL_TARGET_FILE.exists():
         raise FileNotFoundError(f"Target config file not found: {POOL_TARGET_FILE}")
-
     with open(POOL_TARGET_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-def generate_litellm_config(target: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate litellm config from target"""
-    api_key = target.get('api_key', '')
-    base_url = target.get('base_url', '')
-    models = []
-
-    # For all endpoints, use OpenAI-compatible format
-    # The target server will handle the actual API format
-    for model_type in ['haiku_model', 'sonnet_model', 'opus_model']:
-        model_name = target.get(model_type, '')
-        if model_name:
-            models.append({
-                "model_name": model_name,
-                "litellm_params": {
-                    "model": f"openai/{model_name}",
-                    "api_key": api_key,
-                    "api_base": base_url
-                }
-            })
-
-    # Add wildcard model mapping
-    if models:
-        models.append({
-            "model_name": "*",
-            "litellm_params": {
-                "model": "openai/*",
-                "api_key": api_key,
-                "api_base": base_url
-            }
-        })
-
-    return {"model_list": models}
+def update_target():
+    """Update target from config file"""
+    global target_config
+    target_config = load_target_config()
 
 
-async def initialize_proxy():
-    """Initialize litellm proxy"""
-    global current_target, litellm_initialized
-
-    try:
-        # Load target config
-        target = load_target_config()
-        current_target = target
-
-        # Generate litellm config
-        config = generate_litellm_config(target)
-
-        # Save config file
-        config_file = CONFIG_DIR / 'litellm_pool_config.yaml'
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, allow_unicode=True)
-
-        # Import and initialize litellm
-        from litellm.proxy.proxy_server import initialize
-        await initialize(config=str(config_file))
-        litellm_initialized = True
-
-        print(f"[OK] Proxy pool initialized")
-        print(f"   Target: {target.get('base_url')}")
-        print(f"   Models: {[m.get('model_name') for m in config.get('model_list', [])]}")
-
-    except Exception as e:
-        print(f"[ERROR] Proxy pool initialization failed: {e}")
-        raise
+# Create FastAPI app
+app = FastAPI(title="ThriftCCSwitch Pool")
 
 
-async def reload_proxy():
-    """Reload litellm proxy with new config"""
-    global current_target, litellm_initialized
-
-    try:
-        # Load target config
-        target = load_target_config()
-        current_target = target
-
-        # Generate litellm config
-        config = generate_litellm_config(target)
-
-        # Save config file
-        config_file = CONFIG_DIR / 'litellm_pool_config.yaml'
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, allow_unicode=True)
-
-        # Re-initialize litellm (simple approach: just reload config)
-        from litellm.proxy.proxy_server import initialize
-        await initialize(config=str(config_file))
-
-        print(f"[OK] Proxy pool reloaded")
-        print(f"   Target: {target.get('base_url')}")
-
-    except Exception as e:
-        print(f"[ERROR] Proxy pool reload failed: {e}")
-        raise
-
-
-# Import litellm app first
-from litellm.proxy.proxy_server import app as litellm_app, initialize
-
-# Add custom endpoints to litellm app
-@litellm_app.get("/__/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "ok",
-        "target": current_target.get('base_url') if current_target else None,
-        "initialized": litellm_initialized
-    }
-
-
-@litellm_app.post("/__/reload")
-async def reload_config():
-    """Reload config endpoint (internal)"""
-    try:
-        print("\n" + "=" * 50)
-        print("[INFO] Received reload request...")
-        print("=" * 50)
-
-        await reload_proxy()
-
-        print("[OK] Config reloaded")
-        print("=" * 50 + "\n")
-
-        return {
-            "status": "ok",
-            "message": "Config reloaded successfully",
-            "target": current_target.get('base_url') if current_target else None
-        }
-
-    except Exception as e:
-        print(f"[ERROR] Reload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Startup event
-@litellm_app.on_event("startup")
+@app.on_event("startup")
 async def startup_event():
     """Initialize on startup"""
+    global target_config
     print("=" * 50)
     print("[INFO] ThriftCCSwitch Proxy Pool Server starting...")
     print("=" * 50)
@@ -194,7 +69,8 @@ async def startup_event():
         print(f"   Port: {pool_config.get('port')}")
         print(f"   Key: {pool_config.get('key')}")
 
-        await initialize_proxy()
+        update_target()
+        print(f"[OK] Target loaded: {target_config.get('base_url')}")
 
         print("=" * 50)
         print("[OK] Proxy pool server ready")
@@ -205,20 +81,92 @@ async def startup_event():
         raise
 
 
+@app.get("/__/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "ok",
+        "target": target_config.get('base_url') if target_config else None
+    }
+
+
+@app.post("/__/reload")
+async def reload_config():
+    """Reload config endpoint"""
+    try:
+        print("\n" + "=" * 50)
+        print("[INFO] Received reload request...")
+        print("=" * 50)
+
+        update_target()
+
+        print("[OK] Config reloaded")
+        print(f"   New target: {target_config.get('base_url')}")
+        print("=" * 50 + "\n")
+
+        return {
+            "status": "ok",
+            "message": "Config reloaded successfully",
+            "target": target_config.get('base_url')
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Reload failed: {e}")
+        raise
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_request(request: Request, path: str):
+    """Proxy all requests to target server"""
+    if not target_config:
+        return Response(content="Target not configured", status_code=503)
+
+    # Build target URL
+    target_url = target_config.get('base_url', '').rstrip('/')
+    url = f"{target_url}/{path.lstrip('/')}"
+    if request.url.query:
+        url += f"?{request.url.query}"
+
+    # Get request body
+    body = await request.body()
+
+    # Build headers
+    headers = dict(request.headers)
+    headers.pop('host', None)  # Remove host header
+    headers['x-api-key'] = target_config.get('api_key', '')  # Override API key
+
+    # Forward request
+    async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
+        try:
+            response = await client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                content=body,
+                params=request.url.params if request.url.query else None
+            )
+
+            # Return response
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=dict(response.headers)
+            )
+
+        except httpx.HTTPError as e:
+            return Response(content=f"Proxy error: {str(e)}", status_code=502)
+
+
 # Main entry point
 if __name__ == "__main__":
-    # Get port from command line args
-    port = 8899
-    if len(sys.argv) > 1:
-        try:
-            port = int(sys.argv[1])
-        except ValueError:
-            print(f"[WARN] Invalid port number: {sys.argv[1]}, using default port 8899")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, default=8899, help='Port to listen on')
+    args = parser.parse_args()
 
-    # Run server
     uvicorn.run(
-        litellm_app,
+        app,
         host="127.0.0.1",
-        port=port,
+        port=args.port,
         log_level="warning"
     )

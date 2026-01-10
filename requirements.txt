@@ -4,12 +4,15 @@ PyQt5==5.15.11
 # 进程管理 (用于终止代理子进程)
 psutil==6.1.0
 
-# 代理服务相关 (Litellm及其依赖)
+# 代理服务相关
+fastapi==0.121.3
+uvicorn==0.31.1
+httpx==0.27.0
+
+# 本地代理 (litellm 仅用于本地代理功能)
 litellm==1.80.11
 litellm-enterprise==0.1.27
 litellm-proxy-extras==0.4.16
-fastapi==0.121.3
-uvicorn==0.31.1
 PyYAML==6.0.3
 backoff==2.2.1
 orjson==3.10.7

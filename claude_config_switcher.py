@@ -1147,7 +1147,7 @@ title ThriftCCSwitch Pool Server (Port {port})
 echo Starting Proxy Pool Server...
 echo Port: {port}
 echo.
-"{sys.executable}" "{server_script}" {port}
+"{sys.executable}" "{server_script}" --port {port}
 pause
 """
             bat_path = os.path.join(pool_dir, 'start_pool.bat')
