@@ -54,29 +54,54 @@ def generate_litellm_config(target: Dict[str, Any]) -> Dict[str, Any]:
     base_url = target.get('base_url', '')
     models = []
 
+    # Check if target is Anthropic-compatible
+    is_anthropic_compatible = '/anthropic' in base_url or 'anthropic' in base_url.lower()
+
     # Build model mapping list
     for model_type in ['haiku_model', 'sonnet_model', 'opus_model']:
         model_name = target.get(model_type, '')
         if model_name:
+            if is_anthropic_compatible:
+                # Anthropic-compatible: use original model name
+                models.append({
+                    "model_name": model_name,
+                    "litellm_params": {
+                        "model": model_name,
+                        "api_key": api_key,
+                        "api_base": base_url
+                    }
+                })
+            else:
+                # OpenAI-compatible: use openai/ prefix
+                models.append({
+                    "model_name": model_name,
+                    "litellm_params": {
+                        "model": f"openai/{model_name}",
+                        "api_key": api_key,
+                        "api_base": base_url
+                    }
+                })
+
+    # Add wildcard model mapping
+    if models:
+        if is_anthropic_compatible:
             models.append({
-                "model_name": model_name,
+                "model_name": "*",
                 "litellm_params": {
-                    "model": f"openai/{model_name}",
+                    "model": "*",
                     "api_key": api_key,
                     "api_base": base_url
                 }
             })
-
-    # Add wildcard model mapping
-    if models:
-        models.append({
-            "model_name": "*",
-            "litellm_params": {
-                "model": "openai/*",
-                "api_key": api_key,
-                "api_base": base_url
-            }
-        })
+        else:
+            models.append({
+                "model_name": "*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": api_key,
+                    "api_base": base_url
+                }
+            })
 
     return {"model_list": models}
 
