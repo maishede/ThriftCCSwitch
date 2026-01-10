@@ -155,18 +155,9 @@ async def reload_proxy():
         with open(config_file, 'w', encoding='utf-8') as f:
             yaml.dump(config, f, allow_unicode=True)
 
-        # Reload litellm config
-        from litellm.proxy.proxy_server import ProxyConfig
-        from litellm.proxy.cli.utils import load_config
-        import litellm
-        litellm.set_verbose = False
-
-        # Create new config
-        proxy_config = load_config(config=str(config_file))
-
-        # Update router config
-        from litellm.proxy.proxy_server import save_worker_config
-        save_worker_config(config=str(config_file), model_list=config.get('model_list', []))
+        # Re-initialize litellm (simple approach: just reload config)
+        from litellm.proxy.proxy_server import initialize
+        await initialize(config=str(config_file))
 
         print(f"[OK] Proxy pool reloaded")
         print(f"   Target: {target.get('base_url')}")
