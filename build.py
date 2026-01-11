@@ -48,16 +48,18 @@ def build():
         print(f"错误: 找不到文件 {script_file}")
         return
 
-    # --- [新增] 执行清理操作 ---
+    # --- 执行清理操作 ---
     clean_previous_builds(exe_name)
     # -----------------------
 
     print("🚀 正在开始打包...")
+    print("📦 说明：代理池服务器功能已集成到主程序中")
 
     # 3. 排除不需要的模块列表
+    # 注意：不再排除 fastapi、uvicorn、httpx，因为代理池功能需要这些依赖
     excluded_modules = [
-        # 代理池服务相关（独立运行，不需要打包）
-        "litellm", "fastapi", "uvicorn", "httpx", "yaml",
+        # litellm 相关（不需要）
+        "litellm", "yaml",
 
         # 数据科学包（主程序不需要）
         "numpy", "pandas", "scipy", "matplotlib",
@@ -71,16 +73,8 @@ def build():
         "IPython", "jedi", "parso", "prompt_toolkit",
 
         # 其他不需要的包
-        "tensorflow",
-        "tensorboard",
-        "datasets",
-        "tokenizers",
-        "transformers",
-        "PIL",  # Pillow，如果主程序不处理图片
-        "cv2",  # opencv
-        "openpyxl",
-        "botocore",
-        "fsspec",
+        "datasets", "tokenizers", "transformers",
+        "PIL", "cv2", "openpyxl", "botocore", "fsspec",
     ]
 
     # 4. 组装命令
@@ -111,6 +105,10 @@ def build():
         dist_path = os.path.join(os.getcwd(), "dist")
         exe_path = os.path.join(dist_path, f"{exe_name}.exe")
         print(f"文件位置: {exe_path}")
+        print("=" * 30)
+        print("\n💡 提示：")
+        print("   - 直接运行 exe 启动 GUI 模式")
+        print("   - 使用 --pool-server --port 8899 启动代理池服务器模式")
         print("=" * 30)
 
         # 尝试自动打开文件夹

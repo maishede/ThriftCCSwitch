@@ -7,10 +7,11 @@ import ctypes
 import hashlib
 import copy
 import shutil
+from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QScrollArea,
                              QDialog, QFormLayout, QLineEdit, QMessageBox, QFrame,
-                             QProgressDialog, QSpinBox, QCheckBox)
+                             QProgressDialog, QSpinBox, QCheckBox, QTextEdit)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QCloseEvent
 
@@ -40,6 +41,110 @@ CLAUDE_SETTINGS_FILE = os.path.join(CLAUDE_DIR, 'settings.json')
 if not os.path.exists(APP_DIR): os.makedirs(APP_DIR)
 if not os.path.exists(PROXIES_DIR): os.makedirs(PROXIES_DIR)
 if not os.path.exists(CLAUDE_DIR): os.makedirs(CLAUDE_DIR)
+
+
+# --- 可复制文本的消息框 ---
+class CopyableMessageBox(QDialog):
+    """支持文本复制的消息框"""
+
+    def __init__(self, title, text, icon_type="warning", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(200)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        # 图标和标题
+        header_layout = QHBoxLayout()
+
+        # 图标
+        icon_label = QLabel()
+        if icon_type == "warning":
+            icon_label.setText("⚠️")
+        elif icon_type == "error":
+            icon_label.setText("❌")
+        elif icon_type == "info":
+            icon_label.setText("ℹ️")
+        else:
+            icon_label.setText("✅")
+        icon_label.setStyleSheet("font-size: 32px;")
+        header_layout.addWidget(icon_label)
+
+        # 标题
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #333;")
+        header_layout.addWidget(title_label, 1)
+
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # 文本内容（可选中复制）
+        text_edit = QTextEdit()
+        text_edit.setPlainText(text)
+        text_edit.setReadOnly(True)
+        text_edit.setStyleSheet("""
+            QTextEdit {
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                padding: 10px;
+                background-color: #f5f5f5;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+            }
+        """)
+        text_edit.setMinimumHeight(120)
+        layout.addWidget(text_edit)
+
+        # 按钮栏
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        copy_btn = QPushButton("📋 复制文本")
+        copy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        copy_btn.clicked.connect(lambda: self.copy_to_clipboard(text))
+
+        ok_btn = QPushButton("确定")
+        ok_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 24px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2ecc71;
+            }
+        """)
+        ok_btn.clicked.connect(self.accept)
+
+        btn_layout.addWidget(copy_btn)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+
+    def copy_to_clipboard(self, text):
+        """复制文本到剪贴板"""
+        from PyQt5.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
 
 
 # --- 工具类 ---
@@ -150,6 +255,102 @@ class PoolConfig:
             return True
         except Exception as e:
             print(f"重载代理池失败: {e}")
+            return False
+
+
+# --- 代理池启动线程 ---
+class PoolStartupThread(QThread):
+    """代理池启动后台线程，避免阻塞UI"""
+    finished_signal = pyqtSignal(bool, str, int)  # (成功, 消息, 端口)
+
+    def __init__(self, port, pool_dir, error_log, node_data):
+        super().__init__()
+        self.port = port
+        self.pool_dir = pool_dir
+        self.error_log = error_log
+        self.node_data = node_data
+        self.process = None
+        self.max_wait = 15  # 最多等待15秒
+        self.check_interval = 0.5  # 每0.5秒检查一次
+
+        # 构建启动命令
+        if getattr(sys, 'frozen', False):
+            # 编译后的 exe：直接使用 exe
+            self.cmd = [sys.executable, '--pool-server', '--port', str(self.port)]
+        else:
+            # 开发环境：python claude_config_switcher.py --pool-server --port 8899
+            script_path = os.path.abspath(__file__)
+            self.cmd = [sys.executable, script_path, '--pool-server', '--port', str(self.port)]
+
+    def run(self):
+        try:
+            # 使用当前 exe 的新实例启动代理池服务器
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            # 确保错误日志目录存在
+            os.makedirs(os.path.dirname(self.error_log), exist_ok=True)
+
+            self.process = subprocess.Popen(
+                self.cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+
+            # 等待服务启动并检查状态（在后台线程中执行）
+            import time
+            for i in range(int(self.max_wait / self.check_interval)):
+                time.sleep(self.check_interval)
+
+                # 检查进程是否还在运行
+                poll_result = self.process.poll()
+                if poll_result is not None:
+                    self.finished_signal.emit(False,
+                        f"代理池服务启动后立即退出（退出码: {poll_result}）。\n\n"
+                        f"诊断信息：\n"
+                        f"命令: {' '.join(self.cmd)}\n"
+                        f"可能原因：\n"
+                        f"1. 缺少依赖（fastapi、uvicorn、httpx）\n"
+                        f"2. 端口 {self.port} 被占用\n"
+                        f"3. 配置文件错误\n\n"
+                        f"请确保已安装所需依赖：pip install fastapi uvicorn httpx",
+                        self.port
+                    )
+                    return
+
+                # 检查端口是否开始监听
+                if self._check_pool_running():
+                    # 启动成功
+                    self.finished_signal.emit(True, "启动成功", self.port)
+                    return
+
+            # 超时
+            self.finished_signal.emit(False,
+                f"代理池进程正在运行，但端口 {self.port} 未在 {self.max_wait} 秒内开始监听。\n\n"
+                f"可能原因：\n"
+                f"1. 配置文件加载失败\n"
+                f"2. 端口被占用\n"
+                f"3. 依赖库版本不兼容",
+                self.port
+            )
+
+        except Exception as e:
+            self.finished_signal.emit(False, f"启动代理池失败: {e}", self.port)
+
+    def _check_pool_running(self):
+        """检查代理池端口是否在监听"""
+        try:
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            result = sock.connect_ex(('127.0.0.1', self.port))
+            sock.close()
+            return result == 0
+        except:
             return False
 
 
@@ -1216,6 +1417,55 @@ class MainWindow(QMainWindow):
         except:
             return False
 
+    def _find_pool_server_script(self):
+        """查找 pool_server 的路径（优先使用编译好的 exe）"""
+        # 1. 优先查找 pool_server.exe
+        if getattr(sys, 'frozen', False):
+            # 如果是 PyInstaller 打包的 exe，从临时目录查找
+            bundle_dir = getattr(sys, '_MEIPASS', None)
+            if bundle_dir:
+                bundled_exe = os.path.join(bundle_dir, 'pool_server.exe')
+                if os.path.exists(bundled_exe):
+                    return bundled_exe
+
+            # 从 exe 所在目录查找
+            exe_dir = os.path.dirname(sys.executable)
+            exe_in_dir = os.path.join(exe_dir, 'pool_server.exe')
+            if os.path.exists(exe_in_dir):
+                return exe_in_dir
+
+        # 2. 如果是开发环境，查找本地 exe
+        current_dir = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__)
+        local_exe = os.path.join(current_dir, 'pool_dist', 'pool_server.exe')
+        if os.path.exists(local_exe):
+            return local_exe
+
+        # 3. 降级方案：查找 .py 文件（需要有 Python 环境）
+        if getattr(sys, 'frozen', False):
+            bundle_dir = getattr(sys, '_MEIPASS', None)
+            if bundle_dir:
+                bundled_script = os.path.join(bundle_dir, 'pool_server.py')
+                if os.path.exists(bundled_script):
+                    return bundled_script
+
+            exe_dir = os.path.dirname(sys.executable)
+            script_in_exe_dir = os.path.join(exe_dir, 'pool_server.py')
+            if os.path.exists(script_in_exe_dir):
+                return script_in_exe_dir
+
+        # 如果不是 frozen 状态，使用 __file__
+        script_in_module_dir = os.path.join(os.path.dirname(__file__), 'pool_server.py')
+        if os.path.exists(script_in_module_dir):
+            return script_in_module_dir
+
+        # 尝试从当前工作目录查找
+        script_in_cwd = os.path.join(os.getcwd(), 'pool_server.py')
+        if os.path.exists(script_in_cwd):
+            return script_in_cwd
+
+        # 返回默认路径（即使不存在）
+        return script_in_module_dir
+
     def on_pool_port_changed(self, port):
         """端口配置变化"""
         PoolConfig.set_port(port)
@@ -1232,8 +1482,12 @@ class MainWindow(QMainWindow):
             self.start_pool()
 
     def start_pool(self):
-        """启动代理池"""
-        # 防抖：设置操作中标志
+        """启动代理池 - 使用后台线程避免UI卡顿"""
+        # 防抖：检查是否正在操作中
+        if hasattr(self, '_pool_operating') and self._pool_operating:
+            return
+
+        # 设置操作中标志
         self._pool_operating = True
 
         try:
@@ -1241,6 +1495,7 @@ class MainWindow(QMainWindow):
             active_hash = self.get_active_hash()
             if not active_hash:
                 QMessageBox.warning(self, "提示", "请先应用一个配置节点后再开启代理池。")
+                self._pool_operating = False
                 return
 
             # 找到激活的节点
@@ -1252,6 +1507,7 @@ class MainWindow(QMainWindow):
 
             if not current_node:
                 QMessageBox.warning(self, "提示", "找不到当前激活的节点，请先应用一个配置。")
+                self._pool_operating = False
                 return
 
             # 保存目标配置
@@ -1259,114 +1515,64 @@ class MainWindow(QMainWindow):
 
             # 启动代理池服务
             port = PoolConfig.get_port()
-            server_script = os.path.join(os.path.dirname(__file__), 'pool_server.py')
 
-            # 生成启动脚本
+            # 生成启动脚本目录（用于错误日志）
             pool_dir = os.path.join(PROXIES_DIR, 'pool')
             if not os.path.exists(pool_dir):
                 os.makedirs(pool_dir)
 
-            # 使用普通 python.exe 运行服务器（pythonw 可能有兼容性问题）
-            # 通过 STARTUPINFO 完全隐藏窗口
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-
             # 准备错误日志文件
             error_log = os.path.join(pool_dir, 'error.log')
 
-            # 直接启动 Python 脚本，将 stderr 重定向到错误日志文件
-            # 使用多个标志确保窗口不会显示
-            f = open(error_log, 'w')
-            p = subprocess.Popen(
-                [sys.executable, server_script, '--port', str(port)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=f,
-                cwd=os.path.dirname(__file__),
-                startupinfo=startupinfo,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-
-            # 注册代理池进程
-            self.register_proxy_process(p, port, "ThriftCCSwitch-Pool")
-
-            # 等待服务启动并检查状态
-            import time
-            max_wait = 10  # 最多等待10秒
-            check_interval = 0.5  # 每0.5秒检查一次
-
-            for i in range(int(max_wait / check_interval)):
-                time.sleep(check_interval)
-
-                # 首先检查进程是否还在运行
-                poll_result = p.poll()
-                if poll_result is not None:
-                    # 进程已退出，读取错误日志
-                    error_msg = ""
-                    if os.path.exists(error_log):
-                        try:
-                            with open(error_log, 'r', encoding='utf-8') as f:
-                                error_msg = f.read()
-                        except:
-                            pass
-
-                    QMessageBox.warning(self, "启动失败",
-                        f"代理池服务启动后立即退出（退出码: {poll_result}）。\n\n"
-                        f"可能原因：\n"
-                        f"1. 缺少依赖（运行: pip install -r requirements.txt）\n"
-                        f"2. 端口 {port} 被占用\n"
-                        f"3. 配置文件错误\n\n"
-                        f"错误信息：\n{error_msg if error_msg else '(无法读取错误日志)'}"
-                    )
-                    PoolConfig.set_enabled(False)
-                    self.update_pool_status_ui()
-                    return
-
-                # 进程还在运行，检查端口是否开始监听
-                if self.check_pool_running(port):
-                    # 端口已开始监听，启动成功
-                    break
-
-            # 最终检查：如果循环结束后端口仍未监听，也视为失败
-            if not self.check_pool_running(port):
-                QMessageBox.warning(self, "启动超时",
-                    f"代理池进程正在运行，但端口 {port} 未在 {max_wait} 秒内开始监听。\n\n"
-                    f"可能原因：\n"
-                    f"1. 配置文件加载失败\n"
-                    f"2. 端口被占用但进程未检测到\n"
-                    f"3. 依赖库版本不兼容"
-                )
-                # 终止进程
-                try:
-                    p.terminate()
-                except:
-                    pass
-                PoolConfig.set_enabled(False)
-                self.update_pool_status_ui()
-                return
-
-            # 设置代理池为启用状态
-            PoolConfig.set_enabled(True)
-
-            # 应用代理池配置到环境变量
-            self.apply_pool_config_to_env(current_node)
-
-            # 更新 settings.json 为标准模型名
-            self.update_pool_settings_json()
-
-            self.update_pool_status_ui()
-
-            QMessageBox.information(self, "成功",
-                f"代理池已启动（后台运行）！\n\n"
-                f"端口: {port}\n"
-                f"地址: http://127.0.0.1:{port}\n"
-                f"Key: {PoolConfig.get_key()}\n\n"
-                f"环境变量已指向代理池。"
-            )
+            # 使用后台线程启动代理池（使用当前 exe 的新实例）
+            self.pool_startup_worker = PoolStartupThread(port, pool_dir, error_log, current_node)
+            self.pool_startup_worker.finished_signal.connect(self.on_pool_startup_finished)
+            self.pool_startup_worker.start()
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"启动代理池失败: {e}")
+            self._pool_operating = False
+
+    def on_pool_startup_finished(self, success, message, port):
+        """代理池启动完成的回调"""
+        try:
+            if success:
+                # 启动成功，获取当前节点
+                active_hash = self.get_active_hash()
+                current_node = None
+                for node in self.nodes:
+                    if Utils.get_config_hash(node) == active_hash:
+                        current_node = node
+                        break
+
+                if current_node and self.pool_startup_worker.process:
+                    # 注册代理池进程
+                    self.register_proxy_process(self.pool_startup_worker.process, port, "ThriftCCSwitch-Pool")
+
+                    # 设置代理池为启用状态
+                    PoolConfig.set_enabled(True)
+
+                    # 应用代理池配置到环境变量
+                    self.apply_pool_config_to_env(current_node)
+
+                    # 更新 settings.json 为标准模型名
+                    self.update_pool_settings_json()
+
+                    self.update_pool_status_ui()
+
+                    QMessageBox.information(self, "成功",
+                        f"代理池已启动（后台运行）！\n\n"
+                        f"端口: {port}\n"
+                        f"地址: http://127.0.0.1:{port}\n"
+                        f"Key: {PoolConfig.get_key()}\n\n"
+                        f"环境变量已指向代理池。"
+                    )
+            else:
+                # 启动失败 - 使用可复制文本的消息框
+                dialog = CopyableMessageBox("启动失败", message, icon_type="warning", parent=self)
+                dialog.exec_()
+                PoolConfig.set_enabled(False)
+                self.update_pool_status_ui()
         finally:
             # 清除操作中标志
             self._pool_operating = False
@@ -1482,8 +1688,39 @@ class MainWindow(QMainWindow):
             for name, value in env_vars.items():
                 os.environ[name] = value
 
+            # 关键修复：同时更新 settings.json 为节点的模型名（而非代理池的标准模型名）
+            self.update_node_settings_json(current_node)
+
         except Exception as e:
             print(f"恢复环境变量失败: {e}")
+
+    def update_node_settings_json(self, node_data):
+        """更新 settings.json 为节点的模型名称（非代理池模式）"""
+        try:
+            if not os.path.exists(CLAUDE_DIR):
+                os.makedirs(CLAUDE_DIR)
+
+            settings_content = {}
+            if os.path.exists(CLAUDE_SETTINGS_FILE):
+                try:
+                    with open(CLAUDE_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                        settings_content = json.load(f)
+                except:
+                    pass
+
+            if "env" not in settings_content:
+                settings_content["env"] = {}
+
+            # 使用节点配置的模型名
+            settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = node_data.get('haiku_model', '')
+            settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = node_data.get('sonnet_model', '')
+            settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = node_data.get('opus_model', '')
+
+            with open(CLAUDE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(settings_content, f, indent=4)
+
+        except Exception as e:
+            print(f"更新 settings.json 失败: {e}")
 
     def _should_sync_to_pool(self, node_data):
         """判断是否需要同步到代理池"""
@@ -1519,9 +1756,234 @@ class MainWindow(QMainWindow):
                     print(f"终止代理池进程失败: {e}")
 
 
+# ====================================================================
+# 代理池服务器功能（集成到主程序中）
+# ====================================================================
+
+def run_pool_server(port):
+    """运行代理池服务器"""
+    try:
+        from fastapi import FastAPI, Request, Response
+        from fastapi.responses import StreamingResponse
+        import uvicorn
+        import httpx
+    except ImportError as e:
+        print(f"缺少依赖: {e}")
+        print("请运行: pip install fastapi uvicorn httpx")
+        sys.exit(1)
+
+    # Set UTF-8 encoding for Windows console
+    if sys.platform == 'win32':
+        import codecs
+        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+
+    # Config file paths
+    CONFIG_DIR = Path(os.path.expandvars(r'%APPDATA%\.ThriftCCSwitch'))
+    POOL_CONFIG_FILE = CONFIG_DIR / 'pool_config.json'
+    POOL_TARGET_FILE = CONFIG_DIR / 'pool_target.json'
+
+    # Global variables
+    target_config = None
+
+    def load_pool_config():
+        """Load proxy pool config"""
+        if not POOL_CONFIG_FILE.exists():
+            raise FileNotFoundError(f"Config file not found: {POOL_CONFIG_FILE}")
+        with open(POOL_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    def load_target_config():
+        """Load target config"""
+        if not POOL_TARGET_FILE.exists():
+            raise FileNotFoundError(f"Target config file not found: {POOL_TARGET_FILE}")
+        with open(POOL_TARGET_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    def update_target():
+        """Update target from config file"""
+        nonlocal target_config
+        target_config = load_target_config()
+
+    # Create FastAPI app
+    app = FastAPI(title="ThriftCCSwitch Pool")
+
+    @app.on_event("startup")
+    async def startup_event():
+        """Initialize on startup"""
+        nonlocal target_config
+        print("=" * 50)
+        print("[INFO] ThriftCCSwitch Proxy Pool Server starting...")
+        print("=" * 50)
+
+        try:
+            pool_config = load_pool_config()
+            print(f"[INFO] Load config: {POOL_CONFIG_FILE}")
+            print(f"   Port: {pool_config.get('port')}")
+            print(f"   Key: {pool_config.get('key')}")
+
+            update_target()
+            print(f"[OK] Target loaded: {target_config.get('base_url')}")
+
+            print("=" * 50)
+            print("[OK] Proxy pool server ready")
+            print("=" * 50)
+
+        except Exception as e:
+            print(f"[ERROR] Startup failed: {e}")
+            raise
+
+    @app.get("/__/health")
+    async def health_check():
+        """Health check endpoint"""
+        return {
+            "status": "ok",
+            "target": target_config.get('base_url') if target_config else None
+        }
+
+    @app.post("/__/reload")
+    async def reload_config():
+        """Reload config endpoint"""
+        try:
+            print("\n" + "=" * 50)
+            print("[INFO] Received reload request...")
+            print("=" * 50)
+
+            update_target()
+
+            print("[OK] Config reloaded")
+            print(f"   New target: {target_config.get('base_url')}")
+            print("=" * 50 + "\n")
+
+            return {
+                "status": "ok",
+                "message": "Config reloaded successfully",
+                "target": target_config.get('base_url')
+            }
+
+        except Exception as e:
+            print(f"[ERROR] Reload failed: {e}")
+            raise
+
+    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def proxy_request(request: Request, path: str):
+        """Proxy all requests to target server"""
+        if not target_config:
+            return Response(content="Target not configured", status_code=503)
+
+        # Build target URL
+        target_url = target_config.get('base_url', '').rstrip('/')
+        url = f"{target_url}/{path.lstrip('/')}"
+        if request.url.query:
+            url += f"?{request.url.query}"
+
+        # Get request body
+        body = await request.body()
+
+        # Build headers - remove auth headers and use target API key
+        headers = {}
+        for key, value in request.headers.items():
+            # Skip auth-related headers
+            if key.lower() in ['host', 'x-api-key', 'authorization']:
+                continue
+            # Copy other headers
+            headers[key] = value
+
+        # Add target API key
+        api_key = target_config.get('api_key', '')
+        headers['x-api-key'] = api_key
+
+        # Model name mapping (standard Anthropic models -> target platform models)
+        if body and request.method in ["POST", "PUT", "PATCH"]:
+            try:
+                body_dict = json.loads(body)
+
+                # Map standard Anthropic model names to target platform models
+                model_mapping = {
+                    'claude-haiku-4-20250514': target_config.get('haiku_model'),
+                    'claude-sonnet-4-20250514': target_config.get('sonnet_model'),
+                    'claude-opus-4-20250514': target_config.get('opus_model'),
+                }
+
+                model = body_dict.get('model', '')
+                if model in model_mapping:
+                    target_model = model_mapping[model]
+                    if target_model:
+                        body_dict['model'] = target_model
+                        body = json.dumps(body_dict).encode('utf-8')
+                        # Update content-length header
+                        headers['content-length'] = str(len(body))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # If body is not JSON, pass it through unchanged
+                pass
+
+        # Forward request
+        async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
+            try:
+                response = await client.request(
+                    method=request.method,
+                    url=url,
+                    headers=headers,
+                    content=body
+                )
+
+                # Return response (filter out hop-by-hop headers)
+                response_headers = {}
+                for key, value in response.headers.items():
+                    if key.lower() not in ['content-encoding', 'transfer-encoding', 'connection']:
+                        response_headers[key] = value
+
+                return Response(
+                    content=response.content,
+                    status_code=response.status_code,
+                    headers=response_headers
+                )
+
+            except httpx.HTTPError as e:
+                return Response(content=f"Proxy error: {str(e)}", status_code=502)
+
+    # Run uvicorn server
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=port,
+        log_level="warning"
+    )
+
+
+def main():
+    """主入口点：检测命令行参数并启动相应模式"""
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--pool-server', action='store_true', help='Run as pool server')
+    parser.add_argument('--port', type=int, default=8899, help='Port for pool server')
+    parser.add_argument('-h', '--help', action='store_true', help='Show help')
+
+    # 只解析已知参数，其他参数传递给 QApplication
+    args, remaining = parser.parse_known_args()
+
+    if args.help:
+        print("ThriftCCSwitch - Claude Code API 配置管理器")
+        print("")
+        print("用法:")
+        print("  无参数        启动 GUI 模式")
+        print("  --pool-server 启动代理池服务器模式")
+        print("  --port N      指定代理池端口 (默认: 8899)")
+        sys.exit(0)
+
+    if args.pool_server:
+        # 代理池服务器模式
+        print(f"启动代理池服务器模式，端口: {args.port}")
+        run_pool_server(args.port)
+    else:
+        # GUI 模式
+        app = QApplication(sys.argv)
+        app.setFont(QFont("Segoe UI", 9))
+        window = MainWindow()
+        window.show()
+        sys.exit(app.exec_())
+
+
 if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    app.setFont(QFont("Segoe UI", 9))
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec_())
+    main()
