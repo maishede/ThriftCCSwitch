@@ -1266,49 +1266,82 @@ class MainWindow(QMainWindow):
             if not os.path.exists(pool_dir):
                 os.makedirs(pool_dir)
 
-            bat_content = f"""@echo off
-cd /d "{os.path.dirname(__file__)}"
-"{sys.executable}" "{server_script}" --port {port} 2> error.log
-"""
-            bat_path = os.path.join(pool_dir, 'start_pool.bat')
-            with open(bat_path, 'w', encoding='gbk') as f:
-                f.write(bat_content)
+            # 使用普通 python.exe 运行服务器（pythonw 可能有兼容性问题）
+            # 通过 STARTUPINFO 完全隐藏窗口
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
 
-            # 使用 subprocess 启动，隐藏窗口（后台运行）
+            # 准备错误日志文件
+            error_log = os.path.join(pool_dir, 'error.log')
+
+            # 直接启动 Python 脚本，将 stderr 重定向到错误日志文件
+            # 使用多个标志确保窗口不会显示
+            f = open(error_log, 'w')
             p = subprocess.Popen(
-                ['cmd', '/c', bat_path],
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                [sys.executable, server_script, '--port', str(port)],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=f,
+                cwd=os.path.dirname(__file__),
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW
             )
 
             # 注册代理池进程
             self.register_proxy_process(p, port, "ThriftCCSwitch-Pool")
 
-            # 等待服务启动
+            # 等待服务启动并检查状态
             import time
-            time.sleep(3)
+            max_wait = 10  # 最多等待10秒
+            check_interval = 0.5  # 每0.5秒检查一次
 
-            # 检查进程是否还在运行
-            if p.poll() is not None:
-                # 读取错误日志
-                error_log = os.path.join(pool_dir, 'error.log')
-                error_msg = ""
-                if os.path.exists(error_log):
-                    try:
-                        with open(error_log, 'r', encoding='utf-8') as f:
-                            error_msg = f.read()
-                    except:
-                        pass
+            for i in range(int(max_wait / check_interval)):
+                time.sleep(check_interval)
 
-                QMessageBox.warning(self, "启动失败",
-                    f"代理池服务启动后立即退出。\n\n"
+                # 首先检查进程是否还在运行
+                poll_result = p.poll()
+                if poll_result is not None:
+                    # 进程已退出，读取错误日志
+                    error_msg = ""
+                    if os.path.exists(error_log):
+                        try:
+                            with open(error_log, 'r', encoding='utf-8') as f:
+                                error_msg = f.read()
+                        except:
+                            pass
+
+                    QMessageBox.warning(self, "启动失败",
+                        f"代理池服务启动后立即退出（退出码: {poll_result}）。\n\n"
+                        f"可能原因：\n"
+                        f"1. 缺少依赖（运行: pip install -r requirements.txt）\n"
+                        f"2. 端口 {port} 被占用\n"
+                        f"3. 配置文件错误\n\n"
+                        f"错误信息：\n{error_msg if error_msg else '(无法读取错误日志)'}"
+                    )
+                    PoolConfig.set_enabled(False)
+                    self.update_pool_status_ui()
+                    return
+
+                # 进程还在运行，检查端口是否开始监听
+                if self.check_pool_running(port):
+                    # 端口已开始监听，启动成功
+                    break
+
+            # 最终检查：如果循环结束后端口仍未监听，也视为失败
+            if not self.check_pool_running(port):
+                QMessageBox.warning(self, "启动超时",
+                    f"代理池进程正在运行，但端口 {port} 未在 {max_wait} 秒内开始监听。\n\n"
                     f"可能原因：\n"
-                    f"1. 缺少依赖（运行: pip install -r requirements.txt）\n"
-                    f"2. 端口 {port} 被占用\n"
-                    f"3. 配置文件错误\n\n"
-                    f"错误信息：\n{error_msg if error_msg else '(无法读取错误日志)'}"
+                    f"1. 配置文件加载失败\n"
+                    f"2. 端口被占用但进程未检测到\n"
+                    f"3. 依赖库版本不兼容"
                 )
+                # 终止进程
+                try:
+                    p.terminate()
+                except:
+                    pass
                 PoolConfig.set_enabled(False)
                 self.update_pool_status_ui()
                 return
