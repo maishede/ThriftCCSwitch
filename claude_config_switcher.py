@@ -1121,7 +1121,7 @@ class MainWindow(QMainWindow):
             return btn
 
         top_bar.addWidget(create_top_btn("＋ 普通配置", self.add_node, "#2980b9"))
-        top_bar.addWidget(create_top_btn("🛠️ 新建本地代理", self.create_proxy_node, "#8e44ad"))
+        top_bar.addWidget(create_top_btn("🛠️ OPENAI转换", self.create_proxy_node, "#8e44ad"))
 
         top_bar.addStretch()
 
