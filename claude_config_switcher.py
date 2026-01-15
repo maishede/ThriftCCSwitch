@@ -480,6 +480,113 @@ class ApplierThread(QThread):
             json.dump({'hash': hash_val, 'name': self.node_data.get('name')}, f)
 
 
+# --- API测试线程 ---
+class ApiTestThread(QThread):
+    """API测试线程，异步发送测试请求"""
+    finished_signal = pyqtSignal(bool, str, str)  # (成功, 消息, 响应内容)
+
+    def __init__(self, node_data):
+        super().__init__()
+        self.node_data = node_data
+
+    def run(self):
+        try:
+            api_key = self.node_data.get('api_key', '')
+            base_url = self.node_data.get('base_url', '')
+            http_proxy = self.node_data.get('http_proxy', '')
+
+            if not api_key:
+                self.finished_signal.emit(False, "API Key为空", "")
+                return
+
+            if not base_url:
+                self.finished_signal.emit(False, "Base URL为空", "")
+                return
+
+            # 构建请求
+            import requests
+            import urllib3
+
+            # 禁用SSL警告
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+            # 构建完整的API URL
+            if base_url.endswith('/'):
+                api_endpoint = base_url + 'v1/messages'
+            else:
+                api_endpoint = base_url + '/v1/messages'
+
+            # 构建请求头和请求体
+            headers = {
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            }
+
+            # 使用节点配置的sonnet模型，如果没有则使用默认值
+            model = self.node_data.get('sonnet_model', 'claude-sonnet-4-20250514')
+
+            payload = {
+                'model': model,
+                'max_tokens': 100,
+                'messages': [
+                    {'role': 'user', 'content': 'hello'}
+                ]
+            }
+
+            # 设置代理
+            proxies = None
+            if http_proxy:
+                proxies = {
+                    'http': http_proxy,
+                    'https': http_proxy
+                }
+
+            # 发送请求
+            response = requests.post(
+                api_endpoint,
+                headers=headers,
+                json=payload,
+                proxies=proxies,
+                timeout=30,
+                verify=False
+            )
+
+            # 处理响应
+            if response.status_code == 200:
+                try:
+                    response_data = response.json()
+                    # 提取回复内容
+                    content = ""
+                    if 'content' in response_data:
+                        for block in response_data['content']:
+                            if block.get('type') == 'text':
+                                content += block.get('text', '')
+
+                    if content:
+                        self.finished_signal.emit(True, "测试成功！", content)
+                    else:
+                        self.finished_signal.emit(True, "测试成功！(但返回内容为空)", str(response_data))
+                except Exception as e:
+                    self.finished_signal.emit(True, f"测试成功！(解析响应失败: {e})", response.text)
+            else:
+                error_msg = f"HTTP {response.status_code}"
+                try:
+                    error_data = response.json()
+                    if 'error' in error_data:
+                        error_msg += f"\n{error_data['error'].get('message', '')}"
+                except:
+                    error_msg += f"\n{response.text[:200]}"
+                self.finished_signal.emit(False, error_msg, "")
+
+        except requests.exceptions.Timeout:
+            self.finished_signal.emit(False, "请求超时（30秒），请检查网络连接", "")
+        except requests.exceptions.ConnectionError as e:
+            self.finished_signal.emit(False, f"连接失败: {str(e)}", "")
+        except Exception as e:
+            self.finished_signal.emit(False, f"测试失败: {str(e)}", "")
+
+
 # --- 配置管理 ---
 class ConfigManager:
     @staticmethod
@@ -896,6 +1003,13 @@ class NodeWidget(QFrame):
         copy_btn.setStyleSheet(get_btn_style("#3498db", "#5dade2"))
         copy_btn.clicked.connect(self.copy_node)
 
+        # 测试按钮
+        self.test_btn = QPushButton("测试")
+        self.test_btn.setFixedSize(50, 32)
+        self.test_btn.setStyleSheet(get_btn_style("#16a085", "#1abc9c"))
+        self.test_btn.clicked.connect(self.test_node)
+        self.testing = False  # 测试状态标志（防抖）
+
         del_btn = QPushButton("删除")
         del_btn.setFixedSize(50, 32)
         del_btn.setStyleSheet(get_btn_style("#e74c3c", "#ec7063"))
@@ -904,6 +1018,7 @@ class NodeWidget(QFrame):
         btn_layout.addWidget(self.apply_btn)
         btn_layout.addWidget(edit_btn)
         btn_layout.addWidget(copy_btn)
+        btn_layout.addWidget(self.test_btn)
         btn_layout.addWidget(del_btn)
 
         main_layout.addLayout(btn_layout)
@@ -920,6 +1035,32 @@ class NodeWidget(QFrame):
 
     def copy_node(self):
         self.parent_window.duplicate_node(self.index)
+
+    def test_node(self):
+        """测试节点连接 - 防抖处理"""
+        # 检查是否正在测试
+        if self.testing:
+            return
+
+        # 设置测试状态
+        self.testing = True
+        self.test_btn.setEnabled(False)
+        self.test_btn.setText("测试中...")
+
+        # 启动测试线程
+        self.test_thread = ApiTestThread(self.node_data)
+        self.test_thread.finished_signal.connect(self.on_test_finished)
+        self.test_thread.start()
+
+    def on_test_finished(self, success, message, response_content):
+        """测试完成回调"""
+        # 恢复按钮状态
+        self.testing = False
+        self.test_btn.setEnabled(True)
+        self.test_btn.setText("测试")
+
+        # 显示结果弹窗
+        self.parent_window.show_test_result(success, message, response_content)
 
     def delete_node(self):
         msg_box = QMessageBox(self)
@@ -1354,6 +1495,21 @@ class MainWindow(QMainWindow):
     def open_claude_folder(self):
         if not os.path.exists(CLAUDE_DIR): os.makedirs(CLAUDE_DIR)
         os.startfile(CLAUDE_DIR)
+
+    def show_test_result(self, success, message, response_content):
+        """显示API测试结果弹窗"""
+        if success:
+            # 成功弹窗 - 使用可复制文本的消息框
+            title = "测试成功 ✓"
+            text = f"状态: {message}\n\nAPI回复内容:\n{response_content}"
+            dialog = CopyableMessageBox(title, text, icon_type="success", parent=self)
+            dialog.exec_()
+        else:
+            # 失败弹窗
+            title = "测试失败 ❌"
+            text = f"错误信息:\n{message}"
+            dialog = CopyableMessageBox(title, text, icon_type="error", parent=self)
+            dialog.exec_()
 
     # --- 代理池相关方法 ---
 
