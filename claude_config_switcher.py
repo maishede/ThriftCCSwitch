@@ -1934,6 +1934,18 @@ def run_pool_server(port):
         sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
         sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
+    # Setup file logging
+    import logging
+    from datetime import datetime
+    LOG_DIR = Path(os.path.expandvars(r'%APPDATA%\.ThriftCCSwitch\logs'))
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_FILE = LOG_DIR / 'pool_server.log'
+    logger = logging.getLogger('pool_server')
+    logger.setLevel(logging.DEBUG)
+    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    logger.addHandler(file_handler)
+
     # Config file paths
     CONFIG_DIR = Path(os.path.expandvars(r'%APPDATA%\.ThriftCCSwitch'))
     POOL_CONFIG_FILE = CONFIG_DIR / 'pool_config.json'
@@ -2025,6 +2037,7 @@ def run_pool_server(port):
     async def proxy_request(request: Request, path: str):
         """Proxy all requests to target server"""
         if not target_config:
+            logger.warning("Request rejected: target not configured")
             return Response(content="Target not configured", status_code=503)
 
         # Build target URL
@@ -2049,10 +2062,13 @@ def run_pool_server(port):
         api_key = target_config.get('api_key', '')
         headers['x-api-key'] = api_key
 
+        # Extract request model for logging
+        req_model = ''
         # Model name mapping (standard Anthropic models -> target platform models)
         if body and request.method in ["POST", "PUT", "PATCH"]:
             try:
                 body_dict = json.loads(body)
+                req_model = body_dict.get('model', '')
 
                 # Map standard Anthropic model names to target platform models
                 model_mapping = {
@@ -2073,7 +2089,10 @@ def run_pool_server(port):
                 # If body is not JSON, pass it through unchanged
                 pass
 
+        logger.info(f"{request.method} {path} | model={req_model} | target={url}")
+
         # Forward request
+        start_time = datetime.now()
         async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
             try:
                 response = await client.request(
@@ -2082,6 +2101,9 @@ def run_pool_server(port):
                     headers=headers,
                     content=body
                 )
+
+                elapsed = (datetime.now() - start_time).total_seconds()
+                logger.info(f"Response {response.status_code} | {elapsed:.1f}s | size={len(response.content)}")
 
                 # Return response (filter out hop-by-hop headers)
                 response_headers = {}
@@ -2096,6 +2118,8 @@ def run_pool_server(port):
                 )
 
             except httpx.HTTPError as e:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                logger.error(f"Proxy error after {elapsed:.1f}s: {type(e).__name__}: {e} | url={url} | model={req_model}")
                 return Response(content=f"Proxy error: {str(e)}", status_code=502)
 
     # Run uvicorn server
