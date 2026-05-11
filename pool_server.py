@@ -22,7 +22,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / 'pool_server.log'
 
 logger = logging.getLogger('pool_server')
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.WARNING)
 file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
 file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
 logger.addHandler(file_handler)
@@ -159,6 +159,7 @@ async def proxy_request(request: Request, path: str):
 
     # Extract request model for logging
     req_model = ''
+    mapped_model = ''
     # Model name mapping (standard Anthropic models -> target platform models)
     if body and request.method in ["POST", "PUT", "PATCH"]:
         try:
@@ -181,11 +182,12 @@ async def proxy_request(request: Request, path: str):
                     body = json.dumps(body_dict).encode('utf-8')
                     # Update content-length header
                     headers['content-length'] = str(len(body))
+            mapped_model = body_dict.get('model', '')
         except (json.JSONDecodeError, UnicodeDecodeError):
             # If body is not JSON, pass it through unchanged
             pass
 
-    logger.info(f"{request.method} {path} | model={req_model} | target={url}")
+    logger.info(f"{request.method} {path} | model={req_model} -> {mapped_model} | target={url}")
 
     # Forward request
     start_time = datetime.now()
