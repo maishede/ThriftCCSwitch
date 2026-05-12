@@ -164,6 +164,7 @@ class QuotaResultDialog(QDialog):
         layout.addWidget(title_label)
 
         # 内容区域
+        self._provider_name = provider_name
         content_text = self._format_quota(quota_data)
         content_label = QLabel(content_text)
         content_label.setStyleSheet("font-size: 13px; font-family: Consolas, monospace; line-height: 1.6;")
@@ -192,6 +193,9 @@ class QuotaResultDialog(QDialog):
     def _format_quota(self, data):
         """格式化配额数据为可读文本，同时兼容 GLM 和 Z.ai 两种 API 格式"""
         from datetime import datetime
+
+        # Z.ai 的 TIME_LIMIT/TOKENS_LIMIT 含义与 GLM 相反
+        is_zai = getattr(self, '_provider_name', '') == 'Z.ai'
 
         def fmt_num(n):
             """格式化大数字"""
@@ -222,7 +226,12 @@ class QuotaResultDialog(QDialog):
             total_val = lim.get('usage')
             remain_val = lim.get('remaining')
 
-            if lim_type == 'TIME_LIMIT':
+            # Z.ai: TIME_LIMIT=月度MCP配额, TOKENS_LIMIT=5小时窗口
+            # GLM:  TIME_LIMIT=5小时窗口,   TOKENS_LIMIT=月度配额
+            is_time_window = (lim_type == 'TOKENS_LIMIT') if is_zai else (lim_type == 'TIME_LIMIT')
+            is_monthly = (lim_type == 'TIME_LIMIT') if is_zai else (lim_type == 'TOKENS_LIMIT')
+
+            if is_time_window:
                 lines.append("⏱ 5小时时间窗口")
                 if current_val is not None and total_val is not None:
                     lines.append(f"   已用: {fmt_num(current_val)} / {fmt_num(total_val)}  ({pct}%)")
@@ -236,17 +245,9 @@ class QuotaResultDialog(QDialog):
                     reset_dt = datetime.fromtimestamp(reset_ts / 1000)
                     lines.append(f"   重置于: {reset_dt.strftime('%H:%M:%S')}")
 
-                usage_details = lim.get('usageDetails', [])
-                if usage_details:
-                    lines.append("   📋 分项:")
-                    for detail in usage_details:
-                        model = detail.get('modelCode', 'unknown')
-                        usage = detail.get('usage', 0)
-                        lines.append(f"      {model}: {fmt_num(usage)}")
-
                 lines.append("")
 
-            elif lim_type == 'TOKENS_LIMIT':
+            elif is_monthly:
                 lines.append("📊 Token 配额 (月度)")
                 if current_val is not None and total_val is not None:
                     lines.append(f"   已用: {fmt_num(current_val)} / {fmt_num(total_val)}  ({pct}%)")
@@ -262,6 +263,15 @@ class QuotaResultDialog(QDialog):
                 if reset_ts:
                     reset_dt = datetime.fromtimestamp(reset_ts / 1000)
                     lines.append(f"   重置于: {reset_dt.strftime('%m-%d %H:%M')}")
+
+                # usageDetails（模型分项）附在月度配额下
+                usage_details = lim.get('usageDetails', [])
+                if usage_details:
+                    lines.append("   📋 分项:")
+                    for detail in usage_details:
+                        model = detail.get('modelCode', 'unknown')
+                        usage = detail.get('usage', 0)
+                        lines.append(f"      {model}: {fmt_num(usage)}")
 
                 lines.append("")
 
