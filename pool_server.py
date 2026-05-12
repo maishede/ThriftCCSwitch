@@ -160,12 +160,14 @@ async def proxy_request(request: Request, path: str):
     # Extract request model for logging
     req_model = ''
     mapped_model = ''
+    req_stream = False
     # Model name mapping (standard Anthropic models -> target platform models)
     if body and request.method in ["POST", "PUT", "PATCH"]:
         try:
             import json
             body_dict = json.loads(body)
             req_model = body_dict.get('model', '')
+            req_stream = body_dict.get('stream', False)
 
             # Map standard Anthropic model names to target platform models
             model_mapping = {
@@ -187,11 +189,11 @@ async def proxy_request(request: Request, path: str):
             # If body is not JSON, pass it through unchanged
             pass
 
-    logger.info(f"{request.method} {path} | model={req_model} -> {mapped_model} | target={url}")
+    logger.info(f"{request.method} {path} | model={req_model} -> {mapped_model} | stream={req_stream} | target={url}")
 
     # Forward request
     start_time = datetime.now()
-    async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
+    async with httpx.AsyncClient(verify=False, timeout=300.0) as client:
         try:
             response = await client.request(
                 method=request.method,
