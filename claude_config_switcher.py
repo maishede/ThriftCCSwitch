@@ -147,6 +147,96 @@ class CopyableMessageBox(QDialog):
         clipboard.setText(text)
 
 
+class QuotaResultDialog(QDialog):
+    """配额查询结果弹窗"""
+
+    def __init__(self, provider_name, quota_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{provider_name} 配额信息")
+        self.setMinimumWidth(460)
+        self.setMinimumHeight(260)
+
+        layout = QVBoxLayout(self)
+
+        # 标题
+        title_label = QLabel(f"📋 {provider_name} Coding Plan 配额")
+        title_label.setStyleSheet("font-size: 15px; font-weight: bold; margin-bottom: 8px;")
+        layout.addWidget(title_label)
+
+        # 内容区域
+        content_text = self._format_quota(quota_data)
+        content_label = QLabel(content_text)
+        content_label.setStyleSheet("font-size: 13px; font-family: Consolas, monospace; line-height: 1.6;")
+        content_label.setWordWrap(True)
+        content_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        scroll = QScrollArea()
+        scroll.setWidget(content_label)
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        layout.addWidget(scroll)
+
+        # 按钮
+        btn_layout = QHBoxLayout()
+        copy_btn = QPushButton("复制")
+        copy_btn.clicked.connect(lambda: self.copy_to_clipboard(content_text))
+        ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addStretch()
+        btn_layout.addWidget(copy_btn)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+
+    def _format_quota(self, data):
+        """格式化配额数据为可读文本"""
+        lines = []
+        raw = data.get('data', data)
+        limits = raw.get('limits', [])
+
+        for lim in limits:
+            lim_type = lim.get('type', '')
+            if lim_type == 'TIME_LIMIT':
+                unit = lim.get('unit', 5)
+                used = lim.get('currentValue', 0)
+                remaining = lim.get('remaining', 0)
+                reset_ts = lim.get('nextResetTime', 0)
+
+                lines.append(f"⏱ {unit} 小时时间窗口")
+                lines.append(f"   已用: {used}%  |  剩余: {remaining}%")
+
+                if reset_ts:
+                    from datetime import datetime
+                    reset_dt = datetime.fromtimestamp(reset_ts / 1000)
+                    lines.append(f"   重置于: {reset_dt.strftime('%H:%M:%S')}")
+
+                # 用量明细
+                details = lim.get('usageDetails', [])
+                if details:
+                    lines.append("   用量明细:")
+                    for d in details:
+                        if d.get('usage', 0) > 0:
+                            lines.append(f"     {d['modelCode']}: {d['usage']}%")
+                lines.append("")
+
+            elif lim_type == 'TOKENS_LIMIT':
+                pct = lim.get('percentage', 0)
+                lines.append(f"📊 Token 配额: 已用 {pct}%  |  剩余 {100 - pct}%")
+                lines.append("")
+
+        level = raw.get('level', '')
+        if level:
+            lines.append(f"🏷 套餐等级: {level}")
+
+        return "\n".join(lines)
+
+    def copy_to_clipboard(self, text):
+        from PyQt5.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+
+
 # --- 工具类 ---
 class Utils:
     @staticmethod
@@ -157,6 +247,48 @@ class Utils:
         ]}
         s = json.dumps(clean_data, sort_keys=True)
         return hashlib.md5(s.encode('utf-8')).hexdigest()
+
+
+# --- 配额查询供应商注册表 ---
+class QuotaProvider:
+    """供应商配额查询注册表，支持按 base_url 匹配供应商并调用对应的配额查询 API"""
+
+    _registry = {}
+
+    @classmethod
+    def register(cls, domain, query_func, display_name):
+        cls._registry[domain] = (query_func, display_name)
+
+    @classmethod
+    def get_provider(cls, base_url):
+        if not base_url:
+            return None
+        for domain, provider_info in cls._registry.items():
+            if domain in base_url:
+                return provider_info
+        return None
+
+    @classmethod
+    def is_supported(cls, base_url):
+        return cls.get_provider(base_url) is not None
+
+
+def _query_glm_quota(api_key, http_proxy=''):
+    """查询 GLM (open.bigmodel.cn) Coding Plan 配额"""
+    import requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    url = "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
+    headers = {"Authorization": api_key}
+    proxies = {'http': http_proxy, 'https': http_proxy} if http_proxy else None
+
+    resp = requests.get(url, headers=headers, proxies=proxies, timeout=10, verify=False)
+    resp.raise_for_status()
+    return resp.json()
+
+
+QuotaProvider.register('open.bigmodel.cn', _query_glm_quota, 'GLM')
 
 
 # --- 代理池配置管理 ---
@@ -587,6 +719,42 @@ class ApiTestThread(QThread):
             self.finished_signal.emit(False, f"测试失败: {str(e)}", "")
 
 
+class QuotaQueryThread(QThread):
+    """配额查询线程，异步调用供应商配额 API"""
+    finished_signal = pyqtSignal(bool, str, object)  # (成功, 消息, 配额数据)
+
+    def __init__(self, node_data):
+        super().__init__()
+        self.node_data = node_data
+
+    def run(self):
+        import requests
+        try:
+            api_key = self.node_data.get('api_key', '')
+            base_url = self.node_data.get('base_url', '')
+            http_proxy = self.node_data.get('http_proxy', '')
+
+            if not api_key:
+                self.finished_signal.emit(False, "API Key 为空", None)
+                return
+
+            provider = QuotaProvider.get_provider(base_url)
+            if not provider:
+                self.finished_signal.emit(False, "该节点不支持配额查询", None)
+                return
+
+            query_func, display_name = provider
+            result = query_func(api_key, http_proxy)
+            self.finished_signal.emit(True, f"{display_name} 配额查询成功", result)
+
+        except requests.exceptions.Timeout:
+            self.finished_signal.emit(False, "请求超时（10秒）", None)
+        except requests.exceptions.ConnectionError:
+            self.finished_signal.emit(False, "连接失败，请检查网络", None)
+        except Exception as e:
+            self.finished_signal.emit(False, f"查询失败: {str(e)}", None)
+
+
 # --- 配置管理 ---
 class ConfigManager:
     @staticmethod
@@ -1015,10 +1183,24 @@ class NodeWidget(QFrame):
         del_btn.setStyleSheet(get_btn_style("#e74c3c", "#ec7063"))
         del_btn.clicked.connect(self.delete_node)
 
+        # 配额按钮
+        self.quota_btn = QPushButton("配额")
+        self.quota_btn.setFixedSize(50, 32)
+        base_url = node_data.get('base_url', '')
+        if QuotaProvider.is_supported(base_url):
+            self.quota_btn.setStyleSheet(get_btn_style("#2c3e50", "#34495e"))
+            self.quota_btn.clicked.connect(self.query_quota)
+        else:
+            self.quota_btn.setEnabled(False)
+            self.quota_btn.setStyleSheet(get_btn_style("#bdc3c7", "#bdc3c7"))
+            self.quota_btn.setToolTip("该节点不支持配额查询")
+        self._querying_quota = False
+
         btn_layout.addWidget(self.apply_btn)
         btn_layout.addWidget(edit_btn)
         btn_layout.addWidget(copy_btn)
         btn_layout.addWidget(self.test_btn)
+        btn_layout.addWidget(self.quota_btn)
         btn_layout.addWidget(del_btn)
 
         main_layout.addLayout(btn_layout)
@@ -1061,6 +1243,32 @@ class NodeWidget(QFrame):
 
         # 显示结果弹窗
         self.parent_window.show_test_result(success, message, response_content)
+
+    def query_quota(self):
+        """查询配额 - 防抖处理"""
+        if self._querying_quota:
+            return
+        self._querying_quota = True
+        self.quota_btn.setEnabled(False)
+        self.quota_btn.setText("查询中...")
+
+        self._quota_thread = QuotaQueryThread(self.node_data)
+        self._quota_thread.finished_signal.connect(self.on_quota_finished)
+        self._quota_thread.start()
+
+    def on_quota_finished(self, success, message, quota_data):
+        """配额查询完成回调"""
+        self._querying_quota = False
+        self.quota_btn.setEnabled(QuotaProvider.is_supported(self.node_data.get('base_url', '')))
+        self.quota_btn.setText("配额")
+
+        if success and quota_data:
+            provider = QuotaProvider.get_provider(self.node_data.get('base_url', ''))
+            display_name = provider[1] if provider else "Unknown"
+            dialog = QuotaResultDialog(display_name, quota_data, self.parent_window)
+            dialog.exec_()
+        else:
+            QMessageBox.warning(self.parent_window, "配额查询失败", message)
 
     def delete_node(self):
         msg_box = QMessageBox(self)
