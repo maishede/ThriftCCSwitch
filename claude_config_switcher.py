@@ -190,39 +190,79 @@ class QuotaResultDialog(QDialog):
         self.setLayout(layout)
 
     def _format_quota(self, data):
-        """格式化配额数据为可读文本"""
+        """格式化配额数据为可读文本，同时兼容 GLM 和 Z.ai 两种 API 格式"""
+        from datetime import datetime
+
+        def fmt_num(n):
+            """格式化大数字"""
+            if n >= 1_000_000_000:
+                return f"{n / 1_000_000_000:.1f}B"
+            elif n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M"
+            elif n >= 1_000:
+                return f"{n / 1_000:.1f}K"
+            return str(n)
+
         lines = []
         raw = data.get('data', data)
         limits = raw.get('limits', [])
 
+        if not limits:
+            lines.append("未获取到配额数据")
+            return "\n".join(lines)
+
         for lim in limits:
             lim_type = lim.get('type', '')
-            if lim_type == 'TIME_LIMIT':
-                unit = lim.get('unit', 5)
-                used = lim.get('currentValue', 0)
-                remaining = lim.get('remaining', 0)
-                reset_ts = lim.get('nextResetTime', 0)
+            pct = lim.get('percentage', 0)
+            remaining_pct = 100 - pct
+            reset_ts = lim.get('nextResetTime', 0)
 
-                lines.append(f"⏱ {unit} 小时时间窗口")
-                lines.append(f"   已用: {used}%  |  剩余: {remaining}%")
+            # Z.ai 提供绝对数值，GLM 仅提供百分比
+            current_val = lim.get('currentValue')
+            total_val = lim.get('usage')
+            remain_val = lim.get('remaining')
+
+            if lim_type == 'TIME_LIMIT':
+                lines.append("⏱ 5小时时间窗口")
+                if current_val is not None and total_val is not None:
+                    lines.append(f"   已用: {fmt_num(current_val)} / {fmt_num(total_val)}  ({pct}%)")
+                else:
+                    lines.append(f"   已用: {pct}%  |  剩余: {remaining_pct}%")
+
+                if pct >= 80:
+                    lines.append("   ⚠️ 用量已超过80%！")
 
                 if reset_ts:
-                    from datetime import datetime
                     reset_dt = datetime.fromtimestamp(reset_ts / 1000)
                     lines.append(f"   重置于: {reset_dt.strftime('%H:%M:%S')}")
 
-                # 用量明细
-                details = lim.get('usageDetails', [])
-                if details:
-                    lines.append("   用量明细:")
-                    for d in details:
-                        if d.get('usage', 0) > 0:
-                            lines.append(f"     {d['modelCode']}: {d['usage']}%")
+                usage_details = lim.get('usageDetails', [])
+                if usage_details:
+                    lines.append("   📋 分项:")
+                    for detail in usage_details:
+                        model = detail.get('modelCode', 'unknown')
+                        usage = detail.get('usage', 0)
+                        lines.append(f"      {model}: {fmt_num(usage)}")
+
                 lines.append("")
 
             elif lim_type == 'TOKENS_LIMIT':
-                pct = lim.get('percentage', 0)
-                lines.append(f"📊 Token 配额: 已用 {pct}%  |  剩余 {100 - pct}%")
+                lines.append("📊 Token 配额 (月度)")
+                if current_val is not None and total_val is not None:
+                    lines.append(f"   已用: {fmt_num(current_val)} / {fmt_num(total_val)}  ({pct}%)")
+                else:
+                    lines.append(f"   已用: {pct}%  |  剩余: {remaining_pct}%")
+
+                if remain_val is not None:
+                    lines.append(f"   剩余: {fmt_num(remain_val)}")
+
+                if pct >= 80:
+                    lines.append("   ⚠️ 用量已超过80%！")
+
+                if reset_ts:
+                    reset_dt = datetime.fromtimestamp(reset_ts / 1000)
+                    lines.append(f"   重置于: {reset_dt.strftime('%m-%d %H:%M')}")
+
                 lines.append("")
 
         level = raw.get('level', '')
@@ -280,15 +320,47 @@ def _query_glm_quota(api_key, http_proxy=''):
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     url = "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
-    headers = {"Authorization": api_key}
+    headers = {
+        "Authorization": api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+    }
     proxies = {'http': http_proxy, 'https': http_proxy} if http_proxy else None
 
     resp = requests.get(url, headers=headers, proxies=proxies, timeout=10, verify=False)
     resp.raise_for_status()
-    return resp.json()
+
+    result = resp.json()
+    if not result.get('success') or not result.get('data'):
+        raise Exception(result.get('msg', '查询失败：返回数据无效'))
+    return result
+
+
+def _query_zai_quota(api_key, http_proxy=''):
+    """查询 Z.ai (api.z.ai) Coding Plan 配额"""
+    import requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    url = "https://api.z.ai/api/monitor/usage/quota/limit"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+    }
+    proxies = {'http': http_proxy, 'https': http_proxy} if http_proxy else None
+
+    resp = requests.get(url, headers=headers, proxies=proxies, timeout=10, verify=False)
+    resp.raise_for_status()
+
+    result = resp.json()
+    if not result.get('success') or not result.get('data'):
+        raise Exception(result.get('msg', '查询失败：返回数据无效'))
+    return result
 
 
 QuotaProvider.register('open.bigmodel.cn', _query_glm_quota, 'GLM')
+QuotaProvider.register('api.z.ai', _query_zai_quota, 'Z.ai')
 
 
 # --- 代理池配置管理 ---
