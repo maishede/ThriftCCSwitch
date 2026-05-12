@@ -211,12 +211,20 @@ class QuotaResultDialog(QDialog):
             lines.append("未获取到配额数据")
             return "\n".join(lines)
 
-        # 按类型排序：TOKENS_LIMIT（5小时窗口）优先显示
-        type_order = {'TOKENS_LIMIT': 0, 'TIME_LIMIT': 1}
-        limits = sorted(limits, key=lambda x: type_order.get(x.get('type', ''), 9))
+        # 按类型排序：5小时窗口 → 每日限额 → 月度配额
+        def sort_key(x):
+            t = x.get('type', '')
+            u = x.get('unit', 0)
+            if t == 'TOKENS_LIMIT':
+                if u == 3: return 0  # 5小时窗口
+                return 1  # 其他频率限制
+            if t == 'TIME_LIMIT': return 2
+            return 9
+        limits = sorted(limits, key=sort_key)
 
         for lim in limits:
             lim_type = lim.get('type', '')
+            unit = lim.get('unit', 0)
             pct = lim.get('percentage', 0)
             remaining_pct = 100 - pct
             reset_ts = lim.get('nextResetTime', 0)
@@ -224,9 +232,13 @@ class QuotaResultDialog(QDialog):
             total_val = lim.get('usage')
             remain_val = lim.get('remaining')
 
-            # TIME_LIMIT = MCP月度额度, TOKENS_LIMIT = 5小时时间窗口
             if lim_type == 'TOKENS_LIMIT':
-                lines.append("⏱ 5小时时间窗口")
+                if unit == 3:
+                    lines.append("⏱ 5小时时间窗口")
+                elif unit == 6:
+                    lines.append("📅 每日限额")
+                else:
+                    lines.append(f"⏱ 频率限制 (unit={unit})")
                 if current_val is not None and total_val is not None:
                     lines.append(f"   已用: {fmt_num(current_val)} / {fmt_num(total_val)}  ({pct}%)")
                 else:
