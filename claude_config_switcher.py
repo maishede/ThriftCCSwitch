@@ -236,7 +236,7 @@ class QuotaResultDialog(QDialog):
                 if unit == 3:
                     lines.append("⏱ 5小时时间窗口")
                 elif unit == 6:
-                    lines.append("📅 每日限额")
+                    lines.append("📅 每周限额")
                 else:
                     lines.append(f"⏱ 频率限制 (unit={unit})")
                 if current_val is not None and total_val is not None:
@@ -249,7 +249,10 @@ class QuotaResultDialog(QDialog):
 
                 if reset_ts:
                     reset_dt = datetime.fromtimestamp(reset_ts / 1000)
-                    lines.append(f"   重置于: {reset_dt.strftime('%H:%M:%S')}")
+                    if unit == 6:
+                        lines.append(f"   重置于: {reset_dt.strftime('%m-%d %H:%M')}")
+                    else:
+                        lines.append(f"   重置于: {reset_dt.strftime('%H:%M:%S')}")
 
                 lines.append("")
 
