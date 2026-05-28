@@ -54,11 +54,27 @@ python pool_server.py --port 8899
 - `ANTHROPIC_BASE_URL` - API endpoint
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` - Set to '1'
 - `HTTP_PROXY` / `HTTPS_PROXY` - Optional proxy configuration
+- `ANTHROPIC_MODEL` - Default model override (optional, from node's `default_model`)
+- `CLAUDE_CODE_SUBAGENT_MODEL` - Sub-agent model (optional, from node's `subagent_model`)
+- `CLAUDE_CODE_EFFORT_LEVEL` - Reasoning effort level (default: `max`)
+- `API_TIMEOUT_MS` - API request timeout in ms (default: `600000` = 10 min)
+
+**Node Data Structure:**
+- `name` - Display name
+- `api_key` - API key
+- `base_url` - API endpoint URL
+- `haiku_model` / `sonnet_model` / `opus_model` - Model name mappings per tier
+- `default_model` - Override model for all tiers (optional)
+- `subagent_model` - Sub-agent model name (optional)
+- `effort_level` - Reasoning effort: auto/low/medium/high/xhigh/max (default: max)
+- `api_timeout` - Timeout in milliseconds (default: 600000)
+- `http_proxy` - Proxy address (optional)
+- `proxy_path` - Path to proxy startup script (for proxy-generated nodes)
 
 ### Proxy Pool Server (`pool_server.py`)
 
 Independent FastAPI server that:
-- Forwards HTTP requests to a target API endpoint
+- Forwards HTTP requests to a target API endpoint (timeout: 600s)
 - Maps Anthropic model names to target platform models
 - Provides `/__/health` and `/__/reload` endpoints
 - Runs as background process without console window
@@ -72,7 +88,7 @@ Independent FastAPI server that:
 
 **Normal Mode:** Config writes directly to Windows registry environment variables. Requires terminal restart to take effect.
 
-**Proxy Pool Mode:** Environment variables point to local proxy server (`http://127.0.0.1:PORT`). Switching configs updates proxy target via `/__/reload` endpoint without changing environment variables - no terminal restart needed.
+**Proxy Pool Mode:** Environment variables point to local proxy server (`http://127.0.0.1:PORT`). Switching configs updates proxy target via `/__/reload` endpoint without changing environment variables - no terminal restart needed. In pool mode, `ANTHROPIC_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` are NOT set (proxy handles model mapping); only `CLAUDE_CODE_EFFORT_LEVEL` and `API_TIMEOUT_MS` are written.
 
 ## Data Flow
 
@@ -80,7 +96,8 @@ Independent FastAPI server that:
    - `ApplierThread` runs in background
    - If pool enabled: updates `pool_target.json`, calls `/__/reload`
    - If pool disabled: writes to Windows registry via `winreg`, broadcasts environment change
-   - Updates `~/.claude/settings.json` with model mappings
+   - Updates `~/.claude/settings.json` with model mappings and extended env vars
+   - Cleans stale extended env vars from registry and os.environ if empty
    - Saves hash to `current_state.json`
 
 2. **Proxy Pool Toggle:**
