@@ -193,7 +193,7 @@ async def proxy_request(request: Request, path: str):
 
     # Forward request
     start_time = datetime.now()
-    async with httpx.AsyncClient(verify=False, timeout=300.0) as client:
+    async with httpx.AsyncClient(verify=False, timeout=600.0) as client:
         try:
             response = await client.request(
                 method=request.method,

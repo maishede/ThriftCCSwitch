@@ -11,7 +11,8 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QScrollArea,
                              QDialog, QFormLayout, QLineEdit, QMessageBox, QFrame,
-                             QProgressDialog, QSpinBox, QCheckBox, QTextEdit)
+                             QProgressDialog, QSpinBox, QCheckBox, QTextEdit,
+                             QComboBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QCloseEvent
 
@@ -301,10 +302,29 @@ class Utils:
     def get_config_hash(data):
         """计算配置字典的MD5哈希"""
         clean_data = {k: data.get(k) for k in [
-            'api_key', 'base_url', 'haiku_model', 'sonnet_model', 'opus_model', 'http_proxy'
+            'api_key', 'base_url', 'haiku_model', 'sonnet_model', 'opus_model', 'http_proxy',
+            'default_model', 'subagent_model', 'effort_level', 'api_timeout'
         ]}
         s = json.dumps(clean_data, sort_keys=True)
         return hashlib.md5(s.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def build_extended_env(data):
+        """从节点数据构建扩展环境变量（仅包含非空值）"""
+        env = {}
+        default_model = data.get('default_model', '').strip()
+        if default_model:
+            env['ANTHROPIC_MODEL'] = default_model
+        subagent_model = data.get('subagent_model', '').strip()
+        if subagent_model:
+            env['CLAUDE_CODE_SUBAGENT_MODEL'] = subagent_model
+        effort_level = data.get('effort_level', '').strip()
+        if effort_level:
+            env['CLAUDE_CODE_EFFORT_LEVEL'] = effort_level
+        api_timeout = data.get('api_timeout', '').strip()
+        if api_timeout:
+            env['API_TIMEOUT_MS'] = api_timeout
+        return env
 
 
 # --- 配额查询供应商注册表 ---
@@ -629,10 +649,24 @@ class ApplierThread(QThread):
                     env_vars['HTTP_PROXY'] = http_proxy
                     env_vars['HTTPS_PROXY'] = http_proxy
 
+                # 添加扩展环境变量
+                env_vars.update(Utils.build_extended_env(self.node_data))
+
+                # 需要清理的扩展环境变量（若节点中为空则从注册表删除）
+                extended_keys_to_clean = ['ANTHROPIC_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
+                                          'CLAUDE_CODE_EFFORT_LEVEL', 'API_TIMEOUT_MS']
+
                 try:
                     key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
                     for name, value in env_vars.items():
                         winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+                    # 清理不再需要的扩展环境变量
+                    for name in extended_keys_to_clean:
+                        if name not in env_vars:
+                            try:
+                                winreg.DeleteValue(key, name)
+                            except FileNotFoundError:
+                                pass
                     winreg.CloseKey(key)
                     ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 1000, 0)
                 except Exception as e:
@@ -664,6 +698,16 @@ class ApplierThread(QThread):
             os.environ.pop('HTTP_PROXY', None)
             os.environ.pop('HTTPS_PROXY', None)
 
+        # 设置扩展环境变量（先清除可能残留的旧值）
+        extended_keys = ['ANTHROPIC_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
+                         'CLAUDE_CODE_EFFORT_LEVEL', 'API_TIMEOUT_MS']
+        extended_env = Utils.build_extended_env(self.node_data)
+        for k in extended_keys:
+            if k in extended_env:
+                os.environ[k] = extended_env[k]
+            else:
+                os.environ.pop(k, None)
+
     def update_json_config(self):
         if not os.path.exists(CLAUDE_DIR): os.makedirs(CLAUDE_DIR)
         settings_content = {}
@@ -681,10 +725,20 @@ class ApplierThread(QThread):
             settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = STANDARD_ANTHROPIC_MODELS['haiku']
             settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = STANDARD_ANTHROPIC_MODELS['sonnet']
             settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = STANDARD_ANTHROPIC_MODELS['opus']
+            # 代理池模式：不设置 ANTHROPIC_MODEL 和 CLAUDE_CODE_SUBAGENT_MODEL（由代理池映射）
+            # 但行为配置仍然写入
+            effort_level = self.node_data.get('effort_level', '').strip()
+            if effort_level:
+                settings_content["env"]["CLAUDE_CODE_EFFORT_LEVEL"] = effort_level
+            api_timeout = self.node_data.get('api_timeout', '').strip()
+            if api_timeout:
+                settings_content["env"]["API_TIMEOUT_MS"] = api_timeout
         else:
             settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = self.node_data.get('haiku_model', '')
             settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = self.node_data.get('sonnet_model', '')
             settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = self.node_data.get('opus_model', '')
+            # 扩展环境变量写入 settings.json
+            settings_content["env"].update(Utils.build_extended_env(self.node_data))
 
         with open(CLAUDE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(settings_content, f, indent=4)
@@ -885,6 +939,9 @@ class ProxyCreatorDialog(QDialog):
                 padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
             }
             QCheckBox { font-size: 13px; padding: 5px; }
+            QComboBox {
+                padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
+            }
         """)
 
         layout = QVBoxLayout()
@@ -917,6 +974,20 @@ class ProxyCreatorDialog(QDialog):
         self.opus_edit = QLineEdit()
         self.opus_edit.setPlaceholderText("牛逼的模型例如: glm-4.7")
 
+        # Claude Code 扩展配置
+        self.default_model_edit = QLineEdit()
+        self.default_model_edit.setPlaceholderText("如 deepseek-v4-pro[1m]，留空使用默认")
+
+        self.subagent_model_edit = QLineEdit()
+        self.subagent_model_edit.setPlaceholderText("如 deepseek-v4-flash，留空使用默认")
+
+        self.effort_combo = QComboBox()
+        self.effort_combo.setEditable(True)
+        self.effort_combo.addItems(['', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'])
+
+        self.api_timeout_edit = QLineEdit()
+        self.api_timeout_edit.setPlaceholderText("如 600000 (10分钟)，留空使用默认")
+
         # 5. HTTP代理配置
         self.use_proxy_check = QCheckBox("使用HTTP代理")
         self.use_proxy_check.setChecked(False)
@@ -933,6 +1004,10 @@ class ProxyCreatorDialog(QDialog):
         form_layout.addRow("Haiku 映射:", self.haiku_edit)
         form_layout.addRow("Sonnet 映射:", self.sonnet_edit)
         form_layout.addRow("Opus 映射:", self.opus_edit)
+        form_layout.addRow("默认模型:", self.default_model_edit)
+        form_layout.addRow("子代理模型:", self.subagent_model_edit)
+        form_layout.addRow("推理努力级别:", self.effort_combo)
+        form_layout.addRow("API超时(ms):", self.api_timeout_edit)
         form_layout.addRow("", self.use_proxy_check)
         form_layout.addRow("代理地址:", self.proxy_edit)
 
@@ -1080,7 +1155,11 @@ pause
                 'sonnet_model': m_sonnet,
                 'opus_model': m_opus,
                 'http_proxy': proxy_value,
-                'proxy_path': bat_path
+                'proxy_path': bat_path,
+                'default_model': self.default_model_edit.text().strip(),
+                'subagent_model': self.subagent_model_edit.text().strip(),
+                'effort_level': self.effort_combo.currentText().strip(),
+                'api_timeout': self.api_timeout_edit.text().strip(),
             }
 
             QMessageBox.information(self, "生成成功",
@@ -1106,6 +1185,11 @@ class NodeEditorDialog(QDialog):
             }
             QLineEdit:focus { border: 1px solid #3498db; }
             QCheckBox { font-size: 13px; padding: 5px; }
+            QComboBox {
+                padding: 6px; border: 1px solid #cccccc; border-radius: 4px;
+                font-size: 13px; background-color: #ffffff;
+            }
+            QComboBox:focus { border: 1px solid #3498db; }
         """)
         self.node_data = node_data or {}
         layout = QFormLayout()
@@ -1117,6 +1201,23 @@ class NodeEditorDialog(QDialog):
         self.haiku_edit = QLineEdit(self.node_data.get('haiku_model', 'glm-4.5-air'))
         self.sonnet_edit = QLineEdit(self.node_data.get('sonnet_model', 'glm-4.7'))
         self.opus_edit = QLineEdit(self.node_data.get('opus_model', 'glm-4.7'))
+
+        # Claude Code 扩展配置
+        self.default_model_edit = QLineEdit(self.node_data.get('default_model', ''))
+        self.default_model_edit.setPlaceholderText("如 deepseek-v4-pro[1m]，留空使用默认")
+
+        self.subagent_model_edit = QLineEdit(self.node_data.get('subagent_model', ''))
+        self.subagent_model_edit.setPlaceholderText("如 deepseek-v4-flash，留空使用默认")
+
+        self.effort_combo = QComboBox()
+        self.effort_combo.setEditable(True)
+        self.effort_combo.addItems(['', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'])
+        current_effort = self.node_data.get('effort_level', '')
+        idx = self.effort_combo.findText(current_effort)
+        self.effort_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        self.api_timeout_edit = QLineEdit(self.node_data.get('api_timeout', ''))
+        self.api_timeout_edit.setPlaceholderText("如 600000 (10分钟)，留空使用默认")
 
         # 代理配置
         self.use_proxy_check = QCheckBox("使用HTTP代理")
@@ -1134,6 +1235,10 @@ class NodeEditorDialog(QDialog):
         layout.addRow("Haiku Model:", self.haiku_edit)
         layout.addRow("Sonnet Model:", self.sonnet_edit)
         layout.addRow("Opus Model:", self.opus_edit)
+        layout.addRow("默认模型:", self.default_model_edit)
+        layout.addRow("子代理模型:", self.subagent_model_edit)
+        layout.addRow("推理努力级别:", self.effort_combo)
+        layout.addRow("API超时(ms):", self.api_timeout_edit)
         layout.addRow("", self.use_proxy_check)
         layout.addRow("代理地址:", self.proxy_edit)
 
@@ -1159,7 +1264,11 @@ class NodeEditorDialog(QDialog):
             'name': self.name_edit.text(), 'api_key': self.key_edit.text(), 'base_url': self.url_edit.text(),
             'haiku_model': self.haiku_edit.text(), 'sonnet_model': self.sonnet_edit.text(),
             'opus_model': self.opus_edit.text(), 'http_proxy': proxy_value,
-            'proxy_path': self.node_data.get('proxy_path', '')
+            'proxy_path': self.node_data.get('proxy_path', ''),
+            'default_model': self.default_model_edit.text().strip(),
+            'subagent_model': self.subagent_model_edit.text().strip(),
+            'effort_level': self.effort_combo.currentText().strip(),
+            'api_timeout': self.api_timeout_edit.text().strip(),
         }
 
 
@@ -1446,6 +1555,15 @@ class MainWindow(QMainWindow):
                 else:
                     os.environ.pop('HTTP_PROXY', None)
                     os.environ.pop('HTTPS_PROXY', None)
+
+                # 设置扩展环境变量
+                extended_env = Utils.build_extended_env(target_node)
+                for k in ['ANTHROPIC_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
+                           'CLAUDE_CODE_EFFORT_LEVEL', 'API_TIMEOUT_MS']:
+                    if k in extended_env:
+                        os.environ[k] = extended_env[k]
+                    else:
+                        os.environ.pop(k, None)
 
                 # 可选：打印日志或状态栏提示
                 # print("Startup: Environment variables synced from active config.")
@@ -1765,16 +1883,21 @@ class MainWindow(QMainWindow):
 
         Write-Host '--- [1] 当前进程视角 (Process View) ---' -ForegroundColor Cyan
         Write-Host '说明: 这是当前软件和由它启动的子程序能看到的变量' -ForegroundColor DarkGray
-        Get-ChildItem Env:ANTHROPIC*
-        Get-ChildItem Env:CLAUDE*
+        $processVars = Get-ChildItem Env:ANTHROPIC*, Env:CLAUDE* | Sort-Object Name
+        foreach ($v in $processVars) {
+            $val = $v.Value
+            if ($v.Name -match 'AUTH_TOKEN|API_KEY') { $val = $val.Substring(0, [Math]::Min(8, $val.Length)) + '***' }
+            Write-Host "$($v.Name) = $val"
+        }
 
         Write-Host ''
         Write-Host '--- [2] 注册表永久视角 (Registry View) ---' -ForegroundColor Green
         Write-Host '说明: 这是新开CMD/PowerShell或重启Claude后生效的变量' -ForegroundColor DarkGray
-        $keys = @('ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')
-        foreach ($k in $keys) {
-            $val = [System.Environment]::GetEnvironmentVariable($k, 'User')
-            if ($val) { Write-Host "$k = $val" } else { Write-Host "$k = (未设置)" -ForegroundColor DarkGray }
+        $regKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+        $regKey.GetValueNames() | Where-Object { $_ -match '^(ANTHROPIC|CLAUDE)' } | Sort-Object | ForEach-Object {
+            $val = $regKey.GetValue($_)
+            if ($_.ToString() -match 'AUTH_TOKEN|API_KEY') { $val = $val.ToString().Substring(0, [Math]::Min(8, $val.ToString().Length)) + '***' }
+            Write-Host "$_ = $val"
         }
 
         Write-Host ''
@@ -2010,7 +2133,7 @@ class MainWindow(QMainWindow):
                     self.apply_pool_config_to_env(current_node)
 
                     # 更新 settings.json 为标准模型名
-                    self.update_pool_settings_json()
+                    self.update_pool_settings_json(current_node)
 
                     self.update_pool_status_ui()
 
@@ -2065,6 +2188,14 @@ class MainWindow(QMainWindow):
                 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'
             }
 
+            # 代理池模式：行为配置仍写入（effort_level, api_timeout）
+            effort_level = node_data.get('effort_level', '').strip()
+            if effort_level:
+                env_vars['CLAUDE_CODE_EFFORT_LEVEL'] = effort_level
+            api_timeout = node_data.get('api_timeout', '').strip()
+            if api_timeout:
+                env_vars['API_TIMEOUT_MS'] = api_timeout
+
             # 写入注册表
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
             for name, value in env_vars.items():
@@ -2079,7 +2210,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             raise Exception(f"环境变量设置失败: {e}")
 
-    def update_pool_settings_json(self):
+    def update_pool_settings_json(self, node_data=None):
         """更新 settings.json 为标准 Anthropic 模型名（代理池模式）"""
         try:
             if not os.path.exists(CLAUDE_DIR):
@@ -2100,6 +2231,15 @@ class MainWindow(QMainWindow):
             settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = STANDARD_ANTHROPIC_MODELS['haiku']
             settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = STANDARD_ANTHROPIC_MODELS['sonnet']
             settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = STANDARD_ANTHROPIC_MODELS['opus']
+
+            # 代理池模式：行为配置仍写入
+            if node_data:
+                effort_level = node_data.get('effort_level', '').strip()
+                if effort_level:
+                    settings_content["env"]["CLAUDE_CODE_EFFORT_LEVEL"] = effort_level
+                api_timeout = node_data.get('api_timeout', '').strip()
+                if api_timeout:
+                    settings_content["env"]["API_TIMEOUT_MS"] = api_timeout
 
             with open(CLAUDE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(settings_content, f, indent=4)
@@ -2131,16 +2271,32 @@ class MainWindow(QMainWindow):
                 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'
             }
 
+            # 恢复扩展环境变量
+            env_vars.update(Utils.build_extended_env(current_node))
+
             # 写入注册表
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
             for name, value in env_vars.items():
                 winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+            # 清理不再需要的扩展环境变量
+            for name in ['ANTHROPIC_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
+                         'CLAUDE_CODE_EFFORT_LEVEL', 'API_TIMEOUT_MS']:
+                if name not in env_vars:
+                    try:
+                        winreg.DeleteValue(key, name)
+                    except FileNotFoundError:
+                        pass
             winreg.CloseKey(key)
             ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0, 1000, 0)
 
             # 更新当前进程环境变量
             for name, value in env_vars.items():
                 os.environ[name] = value
+            # 清理残留的扩展环境变量
+            for name in ['ANTHROPIC_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
+                         'CLAUDE_CODE_EFFORT_LEVEL', 'API_TIMEOUT_MS']:
+                if name not in env_vars:
+                    os.environ.pop(name, None)
 
             # 关键修复：同时更新 settings.json 为节点的模型名（而非代理池的标准模型名）
             self.update_node_settings_json(current_node)
@@ -2169,6 +2325,9 @@ class MainWindow(QMainWindow):
             settings_content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = node_data.get('haiku_model', '')
             settings_content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = node_data.get('sonnet_model', '')
             settings_content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = node_data.get('opus_model', '')
+
+            # 扩展环境变量
+            settings_content["env"].update(Utils.build_extended_env(node_data))
 
             with open(CLAUDE_SETTINGS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(settings_content, f, indent=4)
@@ -2395,7 +2554,7 @@ def run_pool_server(port):
 
         # Forward request
         start_time = datetime.now()
-        async with httpx.AsyncClient(verify=False, timeout=300.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=600.0) as client:
             try:
                 response = await client.request(
                     method=request.method,
