@@ -942,6 +942,12 @@ class ProxyCreatorDialog(QDialog):
             QComboBox {
                 padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
             }
+            QToolTip {
+                background-color: #2c3e50; color: #ecf0f1;
+                border: 1px solid #34495e; border-radius: 6px;
+                padding: 8px 12px; font-size: 12px;
+                max-width: 300px;
+            }
         """)
 
         layout = QVBoxLayout()
@@ -1013,14 +1019,29 @@ class ProxyCreatorDialog(QDialog):
 
         # 设置标签 tooltip
         proxy_tooltips = {
-            self.haiku_edit: "快速轻量档位，用于简单查询和后台小任务。可不填，留空时 Claude Code 自行决定",
-            self.sonnet_edit: "平衡模型档位，用于日常编码和工具调用。推荐填写",
-            self.opus_edit: "最强模型档位，用于复杂推理和架构设计。Claude Code 主对话优先使用此档。推荐填写",
-            self.default_model_edit: "直接指定 Claude Code 使用的主模型，会覆盖上面的三档映射。适合只提供一个模型的平台（如 DeepSeek）。可不填",
-            self.subagent_model_edit: "Claude Code 后台子任务使用的模型，通常用便宜快速的模型即可。可不填，留空时 Claude Code 自行决定",
-            self.effort_combo: "控制 AI 的思考深度。max = 最深度思考（推荐），low = 快速回答。可选值：auto / low / medium / high / xhigh / max",
-            self.api_timeout_edit: "单次请求最长等待时间（毫秒）。600000 = 10 分钟。网络不稳定时可适当增大",
-            self.proxy_edit: "代理服务器地址，适用于网络受限环境",
+            self.haiku_edit: "<p style='margin:2px 0'><b>快速轻量档位</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>用于简单查询和后台小任务</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
+            self.sonnet_edit: "<p style='margin:2px 0'><b>平衡档位</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>用于日常编码和工具调用</p>"
+                "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
+            self.opus_edit: "<p style='margin:2px 0'><b>最强档位</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>用于复杂推理和架构设计，主对话优先使用</p>"
+                "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
+            self.default_model_edit: "<p style='margin:2px 0'><b>统一主模型</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>设置后会覆盖上面的三档映射，所有档位都用这一个模型</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>适合只提供一个模型的平台（如 DeepSeek）</p>",
+            self.subagent_model_edit: "<p style='margin:2px 0'><b>子代理模型</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>Claude Code 后台子任务使用的模型，通常用便宜快速的即可</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
+            self.effort_combo: "<p style='margin:2px 0'><b>推理思考深度</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>max = 最深度思考，low = 快速回答</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可选: auto / low / medium / high / xhigh / max</p>",
+            self.api_timeout_edit: "<p style='margin:2px 0'><b>请求超时时间</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>单次请求最长等待时间（毫秒）</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>600000 = 10 分钟，网络不稳定时可适当增大</p>",
+            self.proxy_edit: "<p style='margin:2px 0'><b>HTTP 代理</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>适用于网络受限环境，如 http://127.0.0.1:7890</p>",
         }
         for widget, tip in proxy_tooltips.items():
             label = form_layout.labelForField(widget)
@@ -1206,6 +1227,12 @@ class NodeEditorDialog(QDialog):
                 font-size: 13px; background-color: #ffffff;
             }
             QComboBox:focus { border: 1px solid #3498db; }
+            QToolTip {
+                background-color: #2c3e50; color: #ecf0f1;
+                border: 1px solid #34495e; border-radius: 6px;
+                padding: 8px 12px; font-size: 12px;
+                max-width: 300px;
+            }
         """)
         self.node_data = node_data or {}
         layout = QFormLayout()
@@ -1264,16 +1291,31 @@ class NodeEditorDialog(QDialog):
         layout.addRow("", self.use_proxy_check)
         layout.addRow("代理地址:", self.proxy_edit)
 
-        # 设置标签 tooltip
+        # 设置标签 tooltip（HTML 格式，配合深色背景样式）
         tooltips = {
-            self.haiku_edit: "快速轻量档位，用于简单查询和后台小任务。可不填，留空时 Claude Code 自行决定",
-            self.sonnet_edit: "平衡模型档位，用于日常编码和工具调用。推荐填写",
-            self.opus_edit: "最强模型档位，用于复杂推理和架构设计。Claude Code 主对话优先使用此档。推荐填写",
-            self.default_model_edit: "直接指定 Claude Code 使用的主模型，会覆盖上面的三档映射。适合只提供一个模型的平台（如 DeepSeek）。可不填",
-            self.subagent_model_edit: "Claude Code 后台子任务使用的模型，通常用便宜快速的模型即可。可不填，留空时 Claude Code 自行决定",
-            self.effort_combo: "控制 AI 的思考深度。max = 最深度思考（推荐），low = 快速回答。可选值：auto / low / medium / high / xhigh / max",
-            self.api_timeout_edit: "单次请求最长等待时间（毫秒）。600000 = 10 分钟。网络不稳定时可适当增大",
-            self.proxy_edit: "代理服务器地址，适用于网络受限环境",
+            self.haiku_edit: "<p style='margin:2px 0'><b>快速轻量档位</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>用于简单查询和后台小任务</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
+            self.sonnet_edit: "<p style='margin:2px 0'><b>平衡档位</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>用于日常编码和工具调用</p>"
+                "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
+            self.opus_edit: "<p style='margin:2px 0'><b>最强档位</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>用于复杂推理和架构设计，主对话优先使用</p>"
+                "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
+            self.default_model_edit: "<p style='margin:2px 0'><b>统一主模型</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>设置后会覆盖上面的三档映射，所有档位都用这一个模型</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>适合只提供一个模型的平台（如 DeepSeek）</p>",
+            self.subagent_model_edit: "<p style='margin:2px 0'><b>子代理模型</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>Claude Code 后台子任务使用的模型，通常用便宜快速的即可</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
+            self.effort_combo: "<p style='margin:2px 0'><b>推理思考深度</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>max = 最深度思考，low = 快速回答</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可选: auto / low / medium / high / xhigh / max</p>",
+            self.api_timeout_edit: "<p style='margin:2px 0'><b>请求超时时间</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>单次请求最长等待时间（毫秒）</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>600000 = 10 分钟，网络不稳定时可适当增大</p>",
+            self.proxy_edit: "<p style='margin:2px 0'><b>HTTP 代理</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>适用于网络受限环境，如 http://127.0.0.1:7890</p>",
         }
         for widget, tip in tooltips.items():
             label = layout.labelForField(widget)
