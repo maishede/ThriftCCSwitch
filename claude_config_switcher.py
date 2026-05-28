@@ -318,10 +318,10 @@ class Utils:
         subagent_model = data.get('subagent_model', '').strip()
         if subagent_model:
             env['CLAUDE_CODE_SUBAGENT_MODEL'] = subagent_model
-        effort_level = data.get('effort_level', '').strip()
+        effort_level = data.get('effort_level', 'max').strip()
         if effort_level:
             env['CLAUDE_CODE_EFFORT_LEVEL'] = effort_level
-        api_timeout = data.get('api_timeout', '').strip()
+        api_timeout = data.get('api_timeout', '600000').strip()
         if api_timeout:
             env['API_TIMEOUT_MS'] = api_timeout
         return env
@@ -1001,15 +1001,31 @@ class ProxyCreatorDialog(QDialog):
         form_layout.addRow("", self.lan_check)
         form_layout.addRow("目标 URL:", self.target_url_edit)
         form_layout.addRow("API Key:", self.target_key_edit)
-        form_layout.addRow("Haiku 映射:", self.haiku_edit)
+        form_layout.addRow("Haiku 映射?", self.haiku_edit)
         form_layout.addRow("Sonnet 映射:", self.sonnet_edit)
         form_layout.addRow("Opus 映射:", self.opus_edit)
-        form_layout.addRow("默认模型:", self.default_model_edit)
-        form_layout.addRow("子代理模型:", self.subagent_model_edit)
-        form_layout.addRow("推理努力级别:", self.effort_combo)
-        form_layout.addRow("API超时(ms):", self.api_timeout_edit)
+        form_layout.addRow("默认模型?", self.default_model_edit)
+        form_layout.addRow("子代理模型?", self.subagent_model_edit)
+        form_layout.addRow("推理努力级别?", self.effort_combo)
+        form_layout.addRow("API超时(ms)?", self.api_timeout_edit)
         form_layout.addRow("", self.use_proxy_check)
         form_layout.addRow("代理地址:", self.proxy_edit)
+
+        # 设置标签 tooltip
+        proxy_tooltips = {
+            self.haiku_edit: "快速轻量档位，用于简单查询和后台小任务。可不填，留空时 Claude Code 自行决定",
+            self.sonnet_edit: "平衡模型档位，用于日常编码和工具调用。推荐填写",
+            self.opus_edit: "最强模型档位，用于复杂推理和架构设计。Claude Code 主对话优先使用此档。推荐填写",
+            self.default_model_edit: "直接指定 Claude Code 使用的主模型，会覆盖上面的三档映射。适合只提供一个模型的平台（如 DeepSeek）。可不填",
+            self.subagent_model_edit: "Claude Code 后台子任务使用的模型，通常用便宜快速的模型即可。可不填，留空时 Claude Code 自行决定",
+            self.effort_combo: "控制 AI 的思考深度。max = 最深度思考（推荐），low = 快速回答。可选值：auto / low / medium / high / xhigh / max",
+            self.api_timeout_edit: "单次请求最长等待时间（毫秒）。600000 = 10 分钟。网络不稳定时可适当增大",
+            self.proxy_edit: "代理服务器地址，适用于网络受限环境",
+        }
+        for widget, tip in proxy_tooltips.items():
+            label = form_layout.labelForField(widget)
+            if label:
+                label.setToolTip(tip)
 
         layout.addLayout(form_layout)
 
@@ -1197,27 +1213,33 @@ class NodeEditorDialog(QDialog):
         self.key_edit = QLineEdit(self.node_data.get('api_key', ''))
         self.key_edit.setPlaceholderText("sk-...")
         self.key_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
-        self.url_edit = QLineEdit(self.node_data.get('base_url', 'https://open.bigmodel.cn/api/anthropic'))
-        self.haiku_edit = QLineEdit(self.node_data.get('haiku_model', 'glm-4.5-air'))
-        self.sonnet_edit = QLineEdit(self.node_data.get('sonnet_model', 'glm-4.7'))
-        self.opus_edit = QLineEdit(self.node_data.get('opus_model', 'glm-4.7'))
+        self.url_edit = QLineEdit(self.node_data.get('base_url', ''))
+        self.url_edit.setPlaceholderText("如 https://api.deepseek.com/anthropic")
+        self.haiku_edit = QLineEdit(self.node_data.get('haiku_model', ''))
+        self.haiku_edit.setPlaceholderText("如 glm-4.5-air 或 deepseek-v4-flash")
+        self.sonnet_edit = QLineEdit(self.node_data.get('sonnet_model', ''))
+        self.sonnet_edit.setPlaceholderText("如 glm-4.7 或 deepseek-v4-pro[1m]")
+        self.opus_edit = QLineEdit(self.node_data.get('opus_model', ''))
+        self.opus_edit.setPlaceholderText("如 glm-4.7 或 deepseek-v4-pro[1m]")
 
         # Claude Code 扩展配置
         self.default_model_edit = QLineEdit(self.node_data.get('default_model', ''))
-        self.default_model_edit.setPlaceholderText("如 deepseek-v4-pro[1m]，留空使用默认")
+        self.default_model_edit.setPlaceholderText("覆盖三档映射的统一模型，留空使用上面的三档")
 
         self.subagent_model_edit = QLineEdit(self.node_data.get('subagent_model', ''))
         self.subagent_model_edit.setPlaceholderText("如 deepseek-v4-flash，留空使用默认")
 
         self.effort_combo = QComboBox()
         self.effort_combo.setEditable(True)
-        self.effort_combo.addItems(['', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'])
+        self.effort_combo.addItems(['max', 'auto', 'low', 'medium', 'high', 'xhigh', ''])
         current_effort = self.node_data.get('effort_level', '')
+        if not current_effort:
+            current_effort = 'max'
         idx = self.effort_combo.findText(current_effort)
         self.effort_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
-        self.api_timeout_edit = QLineEdit(self.node_data.get('api_timeout', ''))
-        self.api_timeout_edit.setPlaceholderText("如 600000 (10分钟)，留空使用默认")
+        self.api_timeout_edit = QLineEdit(self.node_data.get('api_timeout', '600000'))
+        self.api_timeout_edit.setPlaceholderText("600000 = 10分钟")
 
         # 代理配置
         self.use_proxy_check = QCheckBox("使用HTTP代理")
@@ -1232,15 +1254,31 @@ class NodeEditorDialog(QDialog):
         layout.addRow("节点名称:", self.name_edit)
         layout.addRow("API Key:", self.key_edit)
         layout.addRow("Base URL:", self.url_edit)
-        layout.addRow("Haiku Model:", self.haiku_edit)
+        layout.addRow("Haiku Model?", self.haiku_edit)
         layout.addRow("Sonnet Model:", self.sonnet_edit)
         layout.addRow("Opus Model:", self.opus_edit)
-        layout.addRow("默认模型:", self.default_model_edit)
-        layout.addRow("子代理模型:", self.subagent_model_edit)
-        layout.addRow("推理努力级别:", self.effort_combo)
-        layout.addRow("API超时(ms):", self.api_timeout_edit)
+        layout.addRow("默认模型?", self.default_model_edit)
+        layout.addRow("子代理模型?", self.subagent_model_edit)
+        layout.addRow("推理努力级别?", self.effort_combo)
+        layout.addRow("API超时(ms)?", self.api_timeout_edit)
         layout.addRow("", self.use_proxy_check)
         layout.addRow("代理地址:", self.proxy_edit)
+
+        # 设置标签 tooltip
+        tooltips = {
+            self.haiku_edit: "快速轻量档位，用于简单查询和后台小任务。可不填，留空时 Claude Code 自行决定",
+            self.sonnet_edit: "平衡模型档位，用于日常编码和工具调用。推荐填写",
+            self.opus_edit: "最强模型档位，用于复杂推理和架构设计。Claude Code 主对话优先使用此档。推荐填写",
+            self.default_model_edit: "直接指定 Claude Code 使用的主模型，会覆盖上面的三档映射。适合只提供一个模型的平台（如 DeepSeek）。可不填",
+            self.subagent_model_edit: "Claude Code 后台子任务使用的模型，通常用便宜快速的模型即可。可不填，留空时 Claude Code 自行决定",
+            self.effort_combo: "控制 AI 的思考深度。max = 最深度思考（推荐），low = 快速回答。可选值：auto / low / medium / high / xhigh / max",
+            self.api_timeout_edit: "单次请求最长等待时间（毫秒）。600000 = 10 分钟。网络不稳定时可适当增大",
+            self.proxy_edit: "代理服务器地址，适用于网络受限环境",
+        }
+        for widget, tip in tooltips.items():
+            label = layout.labelForField(widget)
+            if label:
+                label.setToolTip(tip)
 
         btn_box = QHBoxLayout()
         save_btn = QPushButton("保存")
