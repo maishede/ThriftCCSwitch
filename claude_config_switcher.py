@@ -105,33 +105,15 @@ class CopyableMessageBox(QDialog):
 
         copy_btn = QPushButton("📋 复制文本")
         copy_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
+            QPushButton { background-color: #3498db; color: white; border: 1px solid #2980b9; border-radius: 4px; padding: 8px 16px; font-weight: bold; }
+            QPushButton:hover { background-color: #2980b9; }
         """)
         copy_btn.clicked.connect(lambda: self.copy_to_clipboard(text))
 
         ok_btn = QPushButton("确定")
         ok_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #27ae60;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 24px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2ecc71;
-            }
+            QPushButton { background-color: #27ae60; color: white; border: 1px solid #219150; border-radius: 4px; padding: 8px 24px; font-weight: bold; }
+            QPushButton:hover { background-color: #2ecc71; }
         """)
         ok_btn.clicked.connect(self.accept)
 
@@ -1053,12 +1035,17 @@ class ProxyCreatorDialog(QDialog):
         # 按钮
         btn_box = QHBoxLayout()
         create_btn = QPushButton("生成代理并添加节点")
-        create_btn.setStyleSheet(
-            "background-color: #27ae60; color: white; padding: 8px; border-radius: 4px; font-weight: bold;")
+        create_btn.setStyleSheet("""
+            QPushButton { background-color: #27ae60; color: white; border: 1px solid #219150; border-radius: 4px; padding: 8px 20px; font-weight: bold; }
+            QPushButton:hover { background-color: #2ecc71; }
+        """)
         create_btn.clicked.connect(self.generate_proxy)
 
         cancel_btn = QPushButton("取消")
-        cancel_btn.setStyleSheet("padding: 8px;")
+        cancel_btn.setStyleSheet("""
+            QPushButton { background-color: #f5f5f5; color: #333333; border: 1px solid #cccccc; border-radius: 4px; padding: 8px 20px; }
+            QPushButton:hover { background-color: #e0e0e0; }
+        """)
         cancel_btn.clicked.connect(self.reject)
 
         btn_box.addWidget(create_btn)
@@ -1356,8 +1343,16 @@ class NodeEditorDialog(QDialog):
         # === 按钮 ===
         btn_box = QHBoxLayout()
         save_btn = QPushButton("保存")
+        save_btn.setStyleSheet("""
+            QPushButton { background-color: #27ae60; color: white; border: 1px solid #219150; border-radius: 4px; padding: 8px 24px; font-weight: bold; }
+            QPushButton:hover { background-color: #2ecc71; }
+        """)
         save_btn.clicked.connect(self.accept)
         cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet("""
+            QPushButton { background-color: #f5f5f5; color: #333333; border: 1px solid #cccccc; border-radius: 4px; padding: 8px 24px; }
+            QPushButton:hover { background-color: #e0e0e0; }
+        """)
         cancel_btn.clicked.connect(self.reject)
         btn_box.addWidget(save_btn)
         btn_box.addWidget(cancel_btn)
@@ -1464,11 +1459,12 @@ class NodeWidget(QFrame):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
-        def get_btn_style(color, hover_color):
+        def get_btn_style(color, hover_color, border_color=None):
+            border = f"border: 1px solid {border_color};" if border_color else f"border: 1px solid {color};"
             return f"""
-                QPushButton {{ background-color: {color}; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 12px; }}
+                QPushButton {{ background-color: {color}; color: white; {border} border-radius: 4px; font-weight: bold; font-size: 12px; }}
                 QPushButton:hover {{ background-color: {hover_color}; }}
-                QPushButton:disabled {{ background-color: #bdc3c7; color: #fff; }}
+                QPushButton:disabled {{ background-color: #bdc3c7; color: #fff; border-color: #bdc3c7; }}
             """
 
         proxy_path = node_data.get('proxy_path', '')
@@ -1859,16 +1855,9 @@ class MainWindow(QMainWindow):
         self.pool_toggle_btn = QPushButton("开启代理池")
         self.pool_toggle_btn.setFixedSize(110, 32)
         self.pool_toggle_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #27ae60;
-                color: white;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #2ecc71;
-            }
+            QPushButton { background-color: #27ae60; color: white; border: 1px solid #219150; border-radius: 4px; font-weight: bold; font-size: 13px; padding: 0 15px; }
+            QPushButton:hover { background-color: #2ecc71; }
+            QPushButton:disabled { background-color: #bdc3c7; border-color: #95a5a6; }
         """)
         self.pool_toggle_btn.clicked.connect(self.toggle_pool)
         pool_bar_layout.addWidget(self.pool_toggle_btn)
