@@ -170,6 +170,7 @@ async def proxy_request(request: Request, path: str):
             req_stream = body_dict.get('stream', False)
 
             # Map standard Anthropic model names to target platform models
+            # Keep in sync with STANDARD_ANTHROPIC_MODELS in claude_config_switcher.py
             model_mapping = {
                 'claude-haiku-4-5-20251001': target_config.get('haiku_model'),
                 'claude-sonnet-4-6': target_config.get('sonnet_model'),

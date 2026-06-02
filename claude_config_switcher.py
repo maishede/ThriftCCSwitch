@@ -800,7 +800,7 @@ class ApiTestThread(QThread):
             }
 
             # 使用节点配置的sonnet模型，如果没有则使用默认值
-            model = self.node_data.get('sonnet_model', 'claude-sonnet-4-6')
+            model = self.node_data.get('sonnet_model', STANDARD_ANTHROPIC_MODELS['sonnet'])
 
             payload = {
                 'model': model,
@@ -1317,14 +1317,20 @@ class NodeEditorDialog(QDialog):
 
         main_layout.addWidget(self.advanced_widget)
 
-        # 设置标签 tooltip
-        tooltips = {
+        # 设置标签 tooltip（分两段，分别用对应的 layout 查找 label）
+        for widget, tip in {
             self.sonnet_edit: "<p style='margin:2px 0'><b>平衡档位</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>用于日常编码和工具调用</p>"
                 "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
             self.opus_edit: "<p style='margin:2px 0'><b>最强档位</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>用于复杂推理和架构设计，主对话优先使用</p>"
                 "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
+        }.items():
+            label = required_form.labelForField(widget)
+            if label:
+                label.setToolTip(tip)
+
+        for widget, tip in {
             self.haiku_edit: "<p style='margin:2px 0'><b>快速轻量档位</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>用于简单查询和后台小任务</p>"
                 "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
@@ -1342,9 +1348,8 @@ class NodeEditorDialog(QDialog):
                 "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>600000 = 10 分钟，网络不稳定时可适当增大</p>",
             self.proxy_edit: "<p style='margin:2px 0'><b>HTTP 代理</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>适用于网络受限环境，如 http://127.0.0.1:7890</p>",
-        }
-        for widget, tip in tooltips.items():
-            label = widget.parent().layout().labelForField(widget) if widget.parent() else None
+        }.items():
+            label = advanced_form.labelForField(widget)
             if label:
                 label.setToolTip(tip)
 
@@ -1366,13 +1371,12 @@ class NodeEditorDialog(QDialog):
             self.node_data.get('default_model', ''),
             self.node_data.get('subagent_model', ''),
             self.node_data.get('effort_level', '') not in ('', 'max'),
-            self.node_data.get('api_timeout', '600000') != '600000',
+            str(self.node_data.get('api_timeout', '600000')) != '600000',
             self.node_data.get('http_proxy', ''),
         ])
+        self.advanced_widget.setVisible(False)
         if has_advanced_data:
             self.toggle_advanced()
-        else:
-            self.advanced_widget.setVisible(False)
 
     def toggle_advanced(self):
         visible = not self.advanced_widget.isVisible()
@@ -2658,9 +2662,9 @@ def run_pool_server(port):
 
                 # Map standard Anthropic model names to target platform models
                 model_mapping = {
-                    'claude-haiku-4-5-20251001': target_config.get('haiku_model'),
-                    'claude-sonnet-4-6': target_config.get('sonnet_model'),
-                    'claude-opus-4-8': target_config.get('opus_model'),
+                    STANDARD_ANTHROPIC_MODELS['haiku']: target_config.get('haiku_model'),
+                    STANDARD_ANTHROPIC_MODELS['sonnet']: target_config.get('sonnet_model'),
+                    STANDARD_ANTHROPIC_MODELS['opus']: target_config.get('opus_model'),
                 }
 
                 model = body_dict.get('model', '')
