@@ -80,9 +80,9 @@ Independent FastAPI server that:
 - Runs as background process without console window
 
 **Model Mapping in Proxy Pool:**
-- `claude-haiku-4-20250514` → target's haiku_model
-- `claude-sonnet-4-20250514` → target's sonnet_model
-- `claude-opus-4-20250514` → target's opus_model
+- `claude-haiku-4-5-20251001` → target's haiku_model
+- `claude-sonnet-4-6` → target's sonnet_model
+- `claude-opus-4-8` → target's opus_model
 
 ### Operating Modes
 

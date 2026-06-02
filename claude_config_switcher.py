@@ -23,9 +23,9 @@ USER_PROFILE = os.path.expanduser('~')
 
 # 标准的 Anthropic 模型名（用于代理池模式）
 STANDARD_ANTHROPIC_MODELS = {
-    'haiku': 'claude-haiku-4-20250514',
-    'sonnet': 'claude-sonnet-4-20250514',
-    'opus': 'claude-opus-4-20250514'
+    'haiku': 'claude-haiku-4-5-20251001',
+    'sonnet': 'claude-sonnet-4-6',
+    'opus': 'claude-opus-4-8'
 }
 
 # 1. 确保配置目录结构清晰
@@ -800,7 +800,7 @@ class ApiTestThread(QThread):
             }
 
             # 使用节点配置的sonnet模型，如果没有则使用默认值
-            model = self.node_data.get('sonnet_model', 'claude-sonnet-4-20250514')
+            model = self.node_data.get('sonnet_model', 'claude-sonnet-4-6')
 
             payload = {
                 'model': model,
@@ -1235,21 +1235,52 @@ class NodeEditorDialog(QDialog):
             }
         """)
         self.node_data = node_data or {}
-        layout = QFormLayout()
+
+        # --- 主布局 ---
+        main_layout = QVBoxLayout()
+
+        # === 必填区 ===
+        required_form = QFormLayout()
         self.name_edit = QLineEdit(self.node_data.get('name', '默认配置'))
         self.key_edit = QLineEdit(self.node_data.get('api_key', ''))
         self.key_edit.setPlaceholderText("sk-...")
         self.key_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         self.url_edit = QLineEdit(self.node_data.get('base_url', ''))
         self.url_edit.setPlaceholderText("如 https://api.deepseek.com/anthropic")
-        self.haiku_edit = QLineEdit(self.node_data.get('haiku_model', ''))
-        self.haiku_edit.setPlaceholderText("如 glm-4.5-air 或 deepseek-v4-flash")
         self.sonnet_edit = QLineEdit(self.node_data.get('sonnet_model', ''))
         self.sonnet_edit.setPlaceholderText("如 glm-4.7 或 deepseek-v4-pro[1m]")
         self.opus_edit = QLineEdit(self.node_data.get('opus_model', ''))
         self.opus_edit.setPlaceholderText("如 glm-4.7 或 deepseek-v4-pro[1m]")
 
-        # Claude Code 扩展配置
+        required_form.addRow("节点名称:", self.name_edit)
+        required_form.addRow("API Key:", self.key_edit)
+        required_form.addRow("Base URL:", self.url_edit)
+        required_form.addRow("Sonnet Model:", self.sonnet_edit)
+        required_form.addRow("Opus Model:", self.opus_edit)
+        main_layout.addLayout(required_form)
+
+        # === 展开/收起按钮 ===
+        self.toggle_btn = QPushButton("▼ 更多配置")
+        self.toggle_btn.setFlat(True)
+        self.toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.toggle_btn.setStyleSheet("""
+            QPushButton {
+                border: none; color: #3498db; font-size: 12px;
+                text-align: left; padding: 6px 0;
+            }
+            QPushButton:hover { color: #2980b9; text-decoration: underline; }
+        """)
+        self.toggle_btn.clicked.connect(self.toggle_advanced)
+        main_layout.addWidget(self.toggle_btn)
+
+        # === 高级区（可折叠） ===
+        self.advanced_widget = QWidget()
+        advanced_form = QFormLayout(self.advanced_widget)
+        advanced_form.setContentsMargins(0, 0, 0, 0)
+
+        self.haiku_edit = QLineEdit(self.node_data.get('haiku_model', ''))
+        self.haiku_edit.setPlaceholderText("如 glm-4.5-air 或 deepseek-v4-flash")
+
         self.default_model_edit = QLineEdit(self.node_data.get('default_model', ''))
         self.default_model_edit.setPlaceholderText("覆盖三档映射的统一模型，留空使用上面的三档")
 
@@ -1268,40 +1299,35 @@ class NodeEditorDialog(QDialog):
         self.api_timeout_edit = QLineEdit(self.node_data.get('api_timeout', '600000'))
         self.api_timeout_edit.setPlaceholderText("600000 = 10分钟")
 
-        # 代理配置
         self.use_proxy_check = QCheckBox("使用HTTP代理")
         self.use_proxy_check.setChecked(bool(self.node_data.get('http_proxy', '')))
         self.use_proxy_check.stateChanged.connect(self.on_proxy_check_changed)
 
         self.proxy_edit = QLineEdit(self.node_data.get('http_proxy', ''))
         self.proxy_edit.setPlaceholderText("例如: http://127.0.0.1:7890")
-        # 初始显示状态
         self.proxy_edit.setVisible(self.use_proxy_check.isChecked())
 
-        layout.addRow("节点名称:", self.name_edit)
-        layout.addRow("API Key:", self.key_edit)
-        layout.addRow("Base URL:", self.url_edit)
-        layout.addRow("Haiku Model?", self.haiku_edit)
-        layout.addRow("Sonnet Model:", self.sonnet_edit)
-        layout.addRow("Opus Model:", self.opus_edit)
-        layout.addRow("默认模型?", self.default_model_edit)
-        layout.addRow("子代理模型?", self.subagent_model_edit)
-        layout.addRow("推理努力级别?", self.effort_combo)
-        layout.addRow("API超时(ms)?", self.api_timeout_edit)
-        layout.addRow("", self.use_proxy_check)
-        layout.addRow("代理地址:", self.proxy_edit)
+        advanced_form.addRow("Haiku Model:", self.haiku_edit)
+        advanced_form.addRow("默认模型:", self.default_model_edit)
+        advanced_form.addRow("子代理模型:", self.subagent_model_edit)
+        advanced_form.addRow("推理努力级别:", self.effort_combo)
+        advanced_form.addRow("API超时(ms):", self.api_timeout_edit)
+        advanced_form.addRow("", self.use_proxy_check)
+        advanced_form.addRow("代理地址:", self.proxy_edit)
 
-        # 设置标签 tooltip（HTML 格式，配合深色背景样式）
+        main_layout.addWidget(self.advanced_widget)
+
+        # 设置标签 tooltip
         tooltips = {
-            self.haiku_edit: "<p style='margin:2px 0'><b>快速轻量档位</b></p>"
-                "<p style='margin:2px 0;color:#bdc3c7'>用于简单查询和后台小任务</p>"
-                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
             self.sonnet_edit: "<p style='margin:2px 0'><b>平衡档位</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>用于日常编码和工具调用</p>"
                 "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
             self.opus_edit: "<p style='margin:2px 0'><b>最强档位</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>用于复杂推理和架构设计，主对话优先使用</p>"
                 "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
+            self.haiku_edit: "<p style='margin:2px 0'><b>快速轻量档位</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>用于简单查询和后台小任务</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
             self.default_model_edit: "<p style='margin:2px 0'><b>统一主模型</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>设置后会覆盖上面的三档映射，所有档位都用这一个模型</p>"
                 "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>适合只提供一个模型的平台（如 DeepSeek）</p>",
@@ -1318,10 +1344,11 @@ class NodeEditorDialog(QDialog):
                 "<p style='margin:2px 0;color:#bdc3c7'>适用于网络受限环境，如 http://127.0.0.1:7890</p>",
         }
         for widget, tip in tooltips.items():
-            label = layout.labelForField(widget)
+            label = widget.parent().layout().labelForField(widget) if widget.parent() else None
             if label:
                 label.setToolTip(tip)
 
+        # === 按钮 ===
         btn_box = QHBoxLayout()
         save_btn = QPushButton("保存")
         save_btn.clicked.connect(self.accept)
@@ -1329,11 +1356,30 @@ class NodeEditorDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_box.addWidget(save_btn)
         btn_box.addWidget(cancel_btn)
-        layout.addRow(btn_box)
-        self.setLayout(layout)
+        main_layout.addLayout(btn_box)
+
+        self.setLayout(main_layout)
+
+        # 编辑已有节点时，高级字段有值则自动展开
+        has_advanced_data = any([
+            self.node_data.get('haiku_model', ''),
+            self.node_data.get('default_model', ''),
+            self.node_data.get('subagent_model', ''),
+            self.node_data.get('effort_level', '') not in ('', 'max'),
+            self.node_data.get('api_timeout', '600000') != '600000',
+            self.node_data.get('http_proxy', ''),
+        ])
+        if has_advanced_data:
+            self.toggle_advanced()
+        else:
+            self.advanced_widget.setVisible(False)
+
+    def toggle_advanced(self):
+        visible = not self.advanced_widget.isVisible()
+        self.advanced_widget.setVisible(visible)
+        self.toggle_btn.setText("▲ 收起配置" if visible else "▼ 更多配置")
 
     def on_proxy_check_changed(self, state):
-        """代理checkbox状态改变时显示/隐藏代理输入框"""
         self.proxy_edit.setVisible(state == Qt.Checked)
         if state == Qt.Checked:
             self.proxy_edit.setFocus()
@@ -2612,9 +2658,9 @@ def run_pool_server(port):
 
                 # Map standard Anthropic model names to target platform models
                 model_mapping = {
-                    'claude-haiku-4-20250514': target_config.get('haiku_model'),
-                    'claude-sonnet-4-20250514': target_config.get('sonnet_model'),
-                    'claude-opus-4-20250514': target_config.get('opus_model'),
+                    'claude-haiku-4-5-20251001': target_config.get('haiku_model'),
+                    'claude-sonnet-4-6': target_config.get('sonnet_model'),
+                    'claude-opus-4-8': target_config.get('opus_model'),
                 }
 
                 model = body_dict.get('model', '')

@@ -171,9 +171,9 @@ async def proxy_request(request: Request, path: str):
 
             # Map standard Anthropic model names to target platform models
             model_mapping = {
-                'claude-haiku-4-20250514': target_config.get('haiku_model'),
-                'claude-sonnet-4-20250514': target_config.get('sonnet_model'),
-                'claude-opus-4-20250514': target_config.get('opus_model'),
+                'claude-haiku-4-5-20251001': target_config.get('haiku_model'),
+                'claude-sonnet-4-6': target_config.get('sonnet_model'),
+                'claude-opus-4-8': target_config.get('opus_model'),
             }
 
             model = body_dict.get('model', '')
