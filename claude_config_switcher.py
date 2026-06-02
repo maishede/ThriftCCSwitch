@@ -142,27 +142,27 @@ class QuotaResultDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # 标题
-        title_label = QLabel(f"📋 {provider_name} Coding Plan 配额")
-        title_label.setStyleSheet("font-size: 15px; font-weight: bold; margin-bottom: 8px;")
-        layout.addWidget(title_label)
+        self.title_label = QLabel(f"📋 {provider_name} Coding Plan 配额")
+        self.title_label.setStyleSheet("font-size: 15px; font-weight: bold; margin-bottom: 8px;")
+        layout.addWidget(self.title_label)
 
         # 内容区域
-        content_text = self._format_quota(quota_data)
-        content_label = QLabel(content_text)
-        content_label.setStyleSheet("font-size: 13px; font-family: Consolas, monospace; line-height: 1.6;")
-        content_label.setWordWrap(True)
-        content_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.content_text = self._format_quota(quota_data)
+        self.content_label = QLabel(self.content_text)
+        self.content_label.setStyleSheet("font-size: 13px; font-family: Consolas, monospace; line-height: 1.6;")
+        self.content_label.setWordWrap(True)
+        self.content_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
-        scroll = QScrollArea()
-        scroll.setWidget(content_label)
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
-        layout.addWidget(scroll)
+        self.scroll = QScrollArea()
+        self.scroll.setWidget(self.content_label)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("QScrollArea { border: none; }")
+        layout.addWidget(self.scroll)
 
         # 按钮
         btn_layout = QHBoxLayout()
-        copy_btn = QPushButton("复制")
-        copy_btn.clicked.connect(lambda: self.copy_to_clipboard(content_text))
+        copy_btn = QPushButton("📋 复制")
+        copy_btn.clicked.connect(lambda: self.copy_to_clipboard(self.content_label.text()))
         ok_btn = QPushButton("确定")
         ok_btn.clicked.connect(self.accept)
         btn_layout.addStretch()
@@ -171,6 +171,15 @@ class QuotaResultDialog(QDialog):
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
+
+    def update_content(self, content_text, override=False):
+        """更新对话框内容，用于显示错误信息"""
+        if override:
+            self.title_label.setText(f"❌ 配额查询失败")
+            self.content_text = content_text
+        self.content_label.setText(content_text)
+        # 调整滚动区域到内容顶部
+        self.scroll.verticalScrollBar().setValue(0)
 
     def _format_quota(self, data):
         """格式化配额数据为可读文本，兼容 GLM/Z.ai 速率限制格式和 DeepSeek 余额格式"""
@@ -1645,7 +1654,10 @@ class NodeWidget(QFrame):
             dialog = QuotaResultDialog(display_name, quota_data, self.parent_window)
             dialog.exec_()
         else:
-            QMessageBox.warning(self.parent_window, "配额查询失败", message)
+            # 使用可复制文本的对话框显示错误信息
+            dialog = QuotaResultDialog("配额查询失败", None, self.parent_window)
+            dialog.update_content(f"❌ {message}", override=True)
+            dialog.exec_()
 
     def delete_node(self):
         msg_box = QMessageBox(self)
