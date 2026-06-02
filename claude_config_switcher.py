@@ -173,7 +173,7 @@ class QuotaResultDialog(QDialog):
         self.setLayout(layout)
 
     def _format_quota(self, data):
-        """格式化配额数据为可读文本，同时兼容 GLM 和 Z.ai 两种 API 格式"""
+        """格式化配额数据为可读文本，兼容 GLM/Z.ai 速率限制格式和 DeepSeek 余额格式"""
         from datetime import datetime
 
         def fmt_num(n):
@@ -187,6 +187,21 @@ class QuotaResultDialog(QDialog):
             return str(n)
 
         lines = []
+
+        # DeepSeek 余额格式（直接返回 balance 字段）
+        if 'total_balance' in data:
+            currency = data.get('currency', 'CNY')
+            total = float(data.get('total_balance', 0))
+            granted = float(data.get('granted_balance', 0))
+            topped = float(data.get('topped_up_balance', 0))
+
+            lines.append(f"💰 账户余额 ({currency})")
+            lines.append(f"   总余额: {fmt_num(int(total))}")
+            lines.append(f"   赠送余额: {fmt_num(int(granted))}")
+            lines.append(f"   充值余额: {fmt_num(int(topped))}")
+            return "\n".join(lines)
+
+        # GLM/Z.ai 速率限制格式
         raw = data.get('data', data)
         limits = raw.get('limits', [])
 
@@ -379,8 +394,30 @@ def _query_zai_quota(api_key, http_proxy=''):
     return result
 
 
+def _query_deepseek_quota(api_key, http_proxy=''):
+    """查询 DeepSeek (api.deepseek.com) 账户余额"""
+    import requests
+
+    url = "https://api.deepseek.com/user/balance"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+    proxies = {'http': http_proxy, 'https': http_proxy} if http_proxy else None
+
+    resp = requests.get(url, headers=headers, proxies=proxies, timeout=10)
+    resp.raise_for_status()
+
+    result = resp.json()
+    # DeepSeek 直接返回余额字段，无 success/data 包装
+    if 'total_balance' not in result:
+        raise Exception("查询失败：返回数据无效")
+    return result
+
+
 QuotaProvider.register('open.bigmodel.cn', _query_glm_quota, 'GLM')
 QuotaProvider.register('api.z.ai', _query_zai_quota, 'Z.ai')
+QuotaProvider.register('api.deepseek.com', _query_deepseek_quota, 'DeepSeek')
 
 
 # --- 代理池配置管理 ---
