@@ -411,7 +411,9 @@ def _query_deepseek_quota(api_key, http_proxy=''):
     result = resp.json()
     # DeepSeek 直接返回余额字段，无 success/data 包装
     if 'total_balance' not in result:
-        raise Exception("查询失败：返回数据无效")
+        # 打印实际响应用于调试
+        print(f"[DeepSeek Debug] API Response: {result}")
+        raise Exception(f"查询失败：返回数据无效 (响应: {result})")
     return result
 
 
