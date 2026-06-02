@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QScrollArea,
                              QDialog, QFormLayout, QLineEdit, QMessageBox, QFrame,
                              QProgressDialog, QSpinBox, QCheckBox, QTextEdit,
-                             QComboBox)
+                             QComboBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QCloseEvent
 
@@ -1199,6 +1199,7 @@ class NodeEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("配置节点编辑器")
         self.setMinimumWidth(450)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.setStyleSheet("""
             QDialog { background-color: #ffffff; }
             QLabel { color: #333333; font-size: 13px; }
@@ -1238,10 +1239,13 @@ class NodeEditorDialog(QDialog):
         self.sonnet_edit.setPlaceholderText("如 glm-4.7 或 deepseek-v4-pro[1m]")
         self.opus_edit = QLineEdit(self.node_data.get('opus_model', ''))
         self.opus_edit.setPlaceholderText("如 glm-4.7 或 deepseek-v4-pro[1m]")
+        self.haiku_edit = QLineEdit(self.node_data.get('haiku_model', ''))
+        self.haiku_edit.setPlaceholderText("如 glm-4.5-air 或 deepseek-v4-flash")
 
         required_form.addRow("节点名称:", self.name_edit)
         required_form.addRow("API Key:", self.key_edit)
         required_form.addRow("Base URL:", self.url_edit)
+        required_form.addRow("Haiku Model:", self.haiku_edit)
         required_form.addRow("Sonnet Model:", self.sonnet_edit)
         required_form.addRow("Opus Model:", self.opus_edit)
         main_layout.addLayout(required_form)
@@ -1264,9 +1268,6 @@ class NodeEditorDialog(QDialog):
         self.advanced_widget = QWidget()
         advanced_form = QFormLayout(self.advanced_widget)
         advanced_form.setContentsMargins(0, 0, 0, 0)
-
-        self.haiku_edit = QLineEdit(self.node_data.get('haiku_model', ''))
-        self.haiku_edit.setPlaceholderText("如 glm-4.5-air 或 deepseek-v4-flash")
 
         self.default_model_edit = QLineEdit(self.node_data.get('default_model', ''))
         self.default_model_edit.setPlaceholderText("覆盖三档映射的统一模型，留空使用上面的三档")
@@ -1294,7 +1295,6 @@ class NodeEditorDialog(QDialog):
         self.proxy_edit.setPlaceholderText("例如: http://127.0.0.1:7890")
         self.proxy_edit.setVisible(self.use_proxy_check.isChecked())
 
-        advanced_form.addRow("Haiku Model:", self.haiku_edit)
         advanced_form.addRow("默认模型:", self.default_model_edit)
         advanced_form.addRow("子代理模型:", self.subagent_model_edit)
         advanced_form.addRow("推理努力级别:", self.effort_combo)
@@ -1306,6 +1306,9 @@ class NodeEditorDialog(QDialog):
 
         # 设置标签 tooltip（分两段，分别用对应的 layout 查找 label）
         for widget, tip in {
+            self.haiku_edit: "<p style='margin:2px 0'><b>快速轻量档位</b></p>"
+                "<p style='margin:2px 0;color:#bdc3c7'>用于简单查询和后台小任务</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
             self.sonnet_edit: "<p style='margin:2px 0'><b>平衡档位</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>用于日常编码和工具调用</p>"
                 "<p style='margin:2px 0;color:#e67e22;font-size:11px'>推荐填写</p>",
@@ -1318,9 +1321,6 @@ class NodeEditorDialog(QDialog):
                 label.setToolTip(tip)
 
         for widget, tip in {
-            self.haiku_edit: "<p style='margin:2px 0'><b>快速轻量档位</b></p>"
-                "<p style='margin:2px 0;color:#bdc3c7'>用于简单查询和后台小任务</p>"
-                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
             self.default_model_edit: "<p style='margin:2px 0'><b>统一主模型</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>设置后会覆盖上面的三档映射，所有档位都用这一个模型</p>"
                 "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>适合只提供一个模型的平台（如 DeepSeek）</p>",
@@ -1362,7 +1362,6 @@ class NodeEditorDialog(QDialog):
 
         # 编辑已有节点时，高级字段有值则自动展开
         has_advanced_data = any([
-            self.node_data.get('haiku_model', ''),
             self.node_data.get('default_model', ''),
             self.node_data.get('subagent_model', ''),
             self.node_data.get('effort_level', '') not in ('', 'max'),
@@ -1377,6 +1376,7 @@ class NodeEditorDialog(QDialog):
         visible = not self.advanced_widget.isVisible()
         self.advanced_widget.setVisible(visible)
         self.toggle_btn.setText("▲ 收起配置" if visible else "▼ 更多配置")
+        self.layout().activate()
 
     def on_proxy_check_changed(self, state):
         self.proxy_edit.setVisible(state == Qt.Checked)
