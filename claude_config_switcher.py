@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QScrollArea,
                              QDialog, QFormLayout, QLineEdit, QMessageBox, QFrame,
                              QProgressDialog, QSpinBox, QCheckBox, QTextEdit,
-                             QComboBox, QSizePolicy)
+                             QComboBox, QSizePolicy, QStackedWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QCloseEvent
 
@@ -1267,8 +1267,14 @@ class NodeEditorDialog(QDialog):
         main_layout.addWidget(self.toggle_btn)
 
         # === 高级区（可折叠） ===
-        self.advanced_widget = QWidget()
-        advanced_form = QFormLayout(self.advanced_widget)
+        self.stacked_widget = QStackedWidget()
+
+        # 空页面（收起状态）
+        self.empty_page = QWidget()
+
+        # 高级配置页面（展开状态）
+        self.advanced_page = QWidget()
+        advanced_form = QFormLayout(self.advanced_page)
         advanced_form.setContentsMargins(0, 0, 0, 0)
 
         self.default_model_edit = QLineEdit(self.node_data.get('default_model', ''))
@@ -1304,7 +1310,11 @@ class NodeEditorDialog(QDialog):
         advanced_form.addRow("", self.use_proxy_check)
         advanced_form.addRow("代理地址:", self.proxy_edit)
 
-        main_layout.addWidget(self.advanced_widget)
+        self.stacked_widget.addWidget(self.empty_page)
+        self.stacked_widget.addWidget(self.advanced_page)
+        self.stacked_widget.setCurrentIndex(0)
+
+        main_layout.addWidget(self.stacked_widget)
 
         # 设置标签 tooltip（分两段，分别用对应的 layout 查找 label）
         for widget, tip in {
@@ -1370,15 +1380,14 @@ class NodeEditorDialog(QDialog):
             str(self.node_data.get('api_timeout', '600000')) != '600000',
             self.node_data.get('http_proxy', ''),
         ])
-        self.advanced_widget.setVisible(False)
         if has_advanced_data:
-            self.toggle_advanced()
+            self.stacked_widget.setCurrentIndex(1)
+            self.toggle_btn.setText("▲ 收起配置")
 
     def toggle_advanced(self):
-        visible = not self.advanced_widget.isVisible()
-        self.advanced_widget.setVisible(visible)
-        self.toggle_btn.setText("▲ 收起配置" if visible else "▼ 更多配置")
-        self.layout().activate()
+        is_expanded = self.stacked_widget.currentIndex() == 1
+        self.stacked_widget.setCurrentIndex(0 if is_expanded else 1)
+        self.toggle_btn.setText("▲ 收起配置" if not is_expanded else "▼ 更多配置")
 
     def on_proxy_check_changed(self, state):
         self.proxy_edit.setVisible(state == Qt.Checked)
