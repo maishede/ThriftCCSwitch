@@ -197,6 +197,10 @@ class QuotaResultDialog(QDialog):
 
         lines = []
 
+        # 错误情况（quota_data 为 None）
+        if data is None:
+            return data
+
         # DeepSeek 余额格式（直接返回 balance 字段）
         if 'total_balance' in data:
             currency = data.get('currency', 'CNY')
@@ -418,12 +422,12 @@ def _query_deepseek_quota(api_key, http_proxy=''):
     resp.raise_for_status()
 
     result = resp.json()
-    # DeepSeek 直接返回余额字段，无 success/data 包装
-    if 'total_balance' not in result:
-        # 打印实际响应用于调试
+    # DeepSeek 返回 balance_infos 数组，提取第一个元素
+    balance_infos = result.get('balance_infos', [])
+    if not balance_infos or len(balance_infos) == 0:
         print(f"[DeepSeek Debug] API Response: {result}")
-        raise Exception(f"查询失败：返回数据无效 (响应: {result})")
-    return result
+        raise Exception(f"查询失败：返回数据无效 (无 balance_infos)")
+    return balance_infos[0]
 
 
 QuotaProvider.register('open.bigmodel.cn', _query_glm_quota, 'GLM')
