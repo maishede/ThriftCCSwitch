@@ -2350,10 +2350,6 @@ class MainWindow(QMainWindow):
             # 终止代理池进程
             self.kill_pool_process()
 
-            # 等待端口释放（避免 TIME_WAIT 导致端口仍被占用）
-            import time
-            time.sleep(0.5)
-
             # 设置代理池为禁用状态
             PoolConfig.set_enabled(False)
 
