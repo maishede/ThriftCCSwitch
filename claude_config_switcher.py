@@ -971,7 +971,7 @@ class ProxyCreatorDialog(QDialog):
 
         self.effort_combo = QComboBox()
         self.effort_combo.setEditable(True)
-        self.effort_combo.addItems(['', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'])
+        self.effort_combo.addItems(['默认', 'low', 'medium', 'high', 'xhigh', 'max'])
 
         self.api_timeout_edit = QLineEdit()
         self.api_timeout_edit.setPlaceholderText("如 600000 (10分钟)，留空使用默认")
@@ -1017,8 +1017,8 @@ class ProxyCreatorDialog(QDialog):
                 "<p style='margin:2px 0;color:#bdc3c7'>Claude Code 后台子任务使用的模型，通常用便宜快速的即可</p>"
                 "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
             self.effort_combo: "<p style='margin:2px 0'><b>推理思考深度</b></p>"
-                "<p style='margin:2px 0;color:#bdc3c7'>max = 最深度思考，low = 快速回答</p>"
-                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可选: auto / low / medium / high / xhigh / max</p>",
+                "<p style='margin:2px 0;color:#bdc3c7'>默认使用 API 默认值(high)</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可选: 默认 / low / medium / high / xhigh / max</p>",
             self.api_timeout_edit: "<p style='margin:2px 0'><b>请求超时时间</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>单次请求最长等待时间（毫秒）</p>"
                 "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>600000 = 10 分钟，网络不稳定时可适当增大</p>",
@@ -1069,6 +1069,8 @@ class ProxyCreatorDialog(QDialog):
         m_haiku = self.haiku_edit.text().strip()
         m_sonnet = self.sonnet_edit.text().strip()
         m_opus = self.opus_edit.text().strip()
+        effort_raw = self.effort_combo.currentText().strip()
+        effort_level = '' if effort_raw == '默认' else effort_raw
 
         host_ip = "0.0.0.0" if self.lan_check.isChecked() else "127.0.0.1"
 
@@ -1182,7 +1184,7 @@ pause
                 'proxy_path': bat_path,
                 'default_model': self.default_model_edit.text().strip(),
                 'subagent_model': self.subagent_model_edit.text().strip(),
-                'effort_level': self.effort_combo.currentText().strip(),
+                'effort_level': effort_level,
                 'api_timeout': self.api_timeout_edit.text().strip(),
             }
 
@@ -1277,10 +1279,10 @@ class NodeEditorDialog(QDialog):
 
         self.effort_combo = QComboBox()
         self.effort_combo.setEditable(True)
-        self.effort_combo.addItems(['max', 'auto', 'low', 'medium', 'high', 'xhigh', ''])
+        self.effort_combo.addItems(['默认', 'low', 'medium', 'high', 'xhigh', 'max'])
         current_effort = self.node_data.get('effort_level', '')
         if not current_effort:
-            current_effort = 'max'
+            current_effort = '默认'
         idx = self.effort_combo.findText(current_effort)
         self.effort_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
@@ -1328,8 +1330,8 @@ class NodeEditorDialog(QDialog):
                 "<p style='margin:2px 0;color:#bdc3c7'>Claude Code 后台子任务使用的模型，通常用便宜快速的即可</p>"
                 "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可不填，留空时 Claude Code 自行决定</p>",
             self.effort_combo: "<p style='margin:2px 0'><b>推理思考深度</b></p>"
-                "<p style='margin:2px 0;color:#bdc3c7'>max = 最深度思考，low = 快速回答</p>"
-                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可选: auto / low / medium / high / xhigh / max</p>",
+                "<p style='margin:2px 0;color:#bdc3c7'>默认使用 API 默认值(high)</p>"
+                "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>可选: 默认 / low / medium / high / xhigh / max</p>",
             self.api_timeout_edit: "<p style='margin:2px 0'><b>请求超时时间</b></p>"
                 "<p style='margin:2px 0;color:#bdc3c7'>单次请求最长等待时间（毫秒）</p>"
                 "<p style='margin:2px 0;color:#95a5a6;font-size:11px'>600000 = 10 分钟，网络不稳定时可适当增大</p>",
@@ -1364,7 +1366,7 @@ class NodeEditorDialog(QDialog):
         has_advanced_data = any([
             self.node_data.get('default_model', ''),
             self.node_data.get('subagent_model', ''),
-            self.node_data.get('effort_level', '') not in ('', 'max'),
+            self.node_data.get('effort_level', '') not in ('',),
             str(self.node_data.get('api_timeout', '600000')) != '600000',
             self.node_data.get('http_proxy', ''),
         ])
@@ -1385,6 +1387,8 @@ class NodeEditorDialog(QDialog):
 
     def get_data(self):
         proxy_value = self.proxy_edit.text().strip() if self.use_proxy_check.isChecked() else ''
+        effort_raw = self.effort_combo.currentText().strip()
+        effort_level = '' if effort_raw == '默认' else effort_raw
         return {
             'name': self.name_edit.text(), 'api_key': self.key_edit.text(), 'base_url': self.url_edit.text(),
             'haiku_model': self.haiku_edit.text(), 'sonnet_model': self.sonnet_edit.text(),
@@ -1392,7 +1396,7 @@ class NodeEditorDialog(QDialog):
             'proxy_path': self.node_data.get('proxy_path', ''),
             'default_model': self.default_model_edit.text().strip(),
             'subagent_model': self.subagent_model_edit.text().strip(),
-            'effort_level': self.effort_combo.currentText().strip(),
+            'effort_level': effort_level,
             'api_timeout': self.api_timeout_edit.text().strip(),
         }
 
